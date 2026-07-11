@@ -19,9 +19,9 @@ const state = {
 /* ---------------------------------------------------------------- color */
 
 const SEC_COLORS = ["#f87171", "#60a5fa", "#fbbf24"];      // S1 / S2 / S3
-// slow -> fast: deep violet to icy cyan, lightness-monotonic so it still
-// reads as ordered; stays clear of the S1/S2/S3 identity colors
-const SPEED_RAMP = ["#3b0f63", "#3d3b8f", "#2f7aa8", "#25c0d8", "#a8f7ff"];
+// slow -> fast: viridis body (violet -> blue -> teal -> green) but topped
+// with bright aqua instead of yellow; lightness-monotonic, clear of S1/S2/S3
+const SPEED_RAMP = ["#440154", "#3f4795", "#2a788e", "#27ad82", "#52e6bb", "#b3fff0"];
 // most of a lap sits near top speed; gamma spends more of the ramp up there
 const SPEED_GAMMA = 2.0;
 // track dominance: your color <- neutral -> reference's color
