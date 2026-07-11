@@ -117,7 +117,11 @@ if (location.protocol === "file:") {
           <!-- speed cluster: gear on top, big speed centred -->
           <rect x="266" y="34" width="38" height="27" rx="6" class="gear-badge"/>
           <text id="hud-gear" x="285" y="54" class="gear">N</text>
-          <text id="hud-speed" x="285" y="126" class="speed">0</text>
+          <!-- slant comes from skewX, not the italic font face: geometric
+               transforms are rasterized outline-level, so the last digit's
+               overhang can never be clipped to a glyph box -->
+          <text id="hud-speed" x="0" y="0" class="speed"
+                transform="translate(285,126) skewX(-10)">0</text>
           <text x="285" y="146" class="unit">KM/H</text>
           <rect id="drs-pill" x="222" y="164" rx="8" width="56" height="17" class="pill"/>
           <text id="drs-txt" x="250" y="176" class="pill-txt">DRS</text>

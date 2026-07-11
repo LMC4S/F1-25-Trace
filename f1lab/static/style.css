@@ -234,7 +234,10 @@ select {
 .arc.brk { stroke: var(--red); filter: drop-shadow(0 0 4px rgba(248,113,113,.5)); }
 .arc-tick { stroke: #2e3748; stroke-width: 2; }
 .speed {
-  fill: var(--text); font-size: 56px; font-weight: 700; font-style: italic;
+  /* upright face + skewX on the element (see index.html): font-level italic
+     ink overhangs its tabular advance box and some rasterizers clip it,
+     shaving the right edge of the last digit */
+  fill: var(--text); font-size: 56px; font-weight: 700;
   font-family: "Titillium Web", sans-serif;
   text-anchor: middle; font-variant-numeric: tabular-nums;
 }
