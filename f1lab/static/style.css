@@ -149,7 +149,6 @@ select {
 #sector-card {
   position: absolute; right: 14px; top: 10px;
   background: var(--card); border: 1px solid var(--line);
-  border-top: 2px solid var(--f1red);
   border-radius: 10px; padding: 8px 12px;
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   font-size: 12px; font-variant-numeric: tabular-nums;
@@ -179,7 +178,7 @@ select {
   position: absolute; right: 14px; bottom: 12px; width: 370px;
   pointer-events: none;
   background: var(--card);
-  border: 1px solid #232a38; border-top: 2px solid var(--f1red);
+  border: 1px solid #232a38;
   border-radius: 14px;
   padding: 12px 14px 8px;
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);

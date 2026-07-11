@@ -19,8 +19,11 @@ const state = {
 /* ---------------------------------------------------------------- color */
 
 const SEC_COLORS = ["#f87171", "#60a5fa", "#fbbf24"];      // S1 / S2 / S3
-// slow -> fast: one hue, wide lightness spread so corners pop from straights
-const SPEED_RAMP = ["#0a2a5e", "#1160b4", "#22a7d8", "#7ef0ff", "#e9fdff"];
+// slow -> fast: viridis (perceptually ordered, lightness-monotonic), which
+// keeps clear of the S1/S2/S3 identity colors
+const SPEED_RAMP = ["#440154", "#414487", "#2a788e", "#22a884", "#7ad151", "#fde725"];
+// most of a lap sits near top speed; gamma spends more of the ramp up there
+const SPEED_GAMMA = 2.0;
 // track dominance: your color <- neutral -> reference's color
 const GAP_RAMP = ["#22d3ee", "#39414f", "#fb923c"];
 
@@ -382,7 +385,8 @@ function computeLineColors(A) {
     }
     A.spdRange = [mn, mx];
     for (let i = 0; i < n; i++)
-      colors[i] = ramp(SPEED_RAMP, (s.spd[i] - mn) / (mx - mn || 1));
+      colors[i] = ramp(SPEED_RAMP,
+        Math.pow((s.spd[i] - mn) / (mx - mn || 1), SPEED_GAMMA));
   }
   A.lineColors = colors;
 }
@@ -826,7 +830,13 @@ function updateToolbar() {
     hi.textContent = "REF FASTER"; hi.style.color = "#fb923c";
   } else {
     title.textContent = "SPEED";
-    bar.style.background = `linear-gradient(90deg, ${SPEED_RAMP.join(",")})`;
+    // legend bar mirrors the gamma curve applied to the racing line
+    const stops = [];
+    for (let i = 0; i <= 8; i++) {
+      const p = i / 8;
+      stops.push(`${ramp(SPEED_RAMP, Math.pow(p, SPEED_GAMMA))} ${p * 100}%`);
+    }
+    bar.style.background = `linear-gradient(90deg, ${stops.join(",")})`;
     const r = state.lapA.spdRange || [0, 0];
     lo.textContent = r[0]; lo.style.color = "";
     hi.textContent = r[1] + " KM/H"; hi.style.color = "";
