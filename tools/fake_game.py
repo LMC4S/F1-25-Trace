@@ -324,13 +324,23 @@ def main():
             d = lap.dist_at(t_in)
             vals = lap.at(d)
             s1, s2 = sectors[idx]
-            cars[idx] = {
-                "t_ms": int(t_in * 1000), "d": d,
-                "total_d": (lap_num - 1) * lap_len + d,
-                "lap_num": lap_num,
-                "last_ms": lap.lap_ms if lap_num > 1 else 0,
-                "s1": s1, "s2": s2, **vals,
-            }
+            if idx == 1:
+                # the rival mimics a real TT ghost: it loops the same lap
+                # forever — lap_num never increments, time/distance wrap
+                cars[idx] = {
+                    "t_ms": int(t_in * 1000), "d": d, "total_d": d,
+                    "lap_num": 1,
+                    "last_ms": lap.lap_ms if sim_t > lap_dur else 0,
+                    "s1": s1, "s2": s2, **vals,
+                }
+            else:
+                cars[idx] = {
+                    "t_ms": int(t_in * 1000), "d": d,
+                    "total_d": (lap_num - 1) * lap_len + d,
+                    "lap_num": lap_num,
+                    "last_ms": lap.lap_ms if lap_num > 1 else 0,
+                    "s1": s1, "s2": s2, **vals,
+                }
             positions[idx] = pos_of(d)
 
         sock.sendto(motion_packet(sim_t, frame, positions), dest)

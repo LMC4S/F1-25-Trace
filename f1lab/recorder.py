@@ -43,6 +43,9 @@ class Recorder(threading.Thread):
             "listening": False, "udp_port": udp_port, "packets": 0, "pps": 0,
             "packet_format": None, "session": None, "live": None,
             "last_lap": None, "ghosts": None, "warnings": [],
+            "packet_sizes": {},   # pid -> observed byte size (layout probe)
+            "cars": {},           # tracked car idx -> live buffer stats
+            "last_drop": None,    # why the last non-player lap was not stored
         }
         self._status_lock = threading.Lock()
         self._reset_session_state(None)
@@ -140,6 +143,11 @@ class Recorder(threading.Thread):
         self._set_status(packet_format=fmt)
 
         pid = h.packet_id
+        sizes = self.status["packet_sizes"]
+        if sizes.get(str(pid)) != len(data):
+            with self._status_lock:
+                sizes[str(pid)] = len(data)
+
         if pid == packets.LAP_DATA:
             self._on_lap_data(data, fmt)
         elif pid == packets.MOTION:
@@ -229,10 +237,23 @@ class Recorder(threading.Thread):
                 last = samples[-1]
                 if cl.current_lap_ms == last[0]:
                     continue  # duplicate frame
-                # flashback / rewind: drop samples past the new position
                 if cl.current_lap_ms < last[0] or cl.lap_distance < last[1] - 1.0:
-                    while samples and samples[-1][1] >= cl.lap_distance:
-                        samples.pop()
+                    span = samples[-1][1] - samples[0][1]
+                    if (idx != self.player_idx and cl.lap_distance < 200 and
+                            self.track_length and
+                            span > 0.9 * self.track_length):
+                        # ghost looping: it restarts its lap at the line
+                        # without incrementing lap_num — that's a completed
+                        # lap, not a flashback
+                        self._finalize(idx, buf,
+                                       cl.last_lap_ms or samples[-1][0])
+                        buf = self.bufs[idx] = LapBuffer(cl.lap_num)
+                        samples = buf.samples
+                    else:
+                        # flashback / rewind / reset: drop samples past the
+                        # new position
+                        while samples and samples[-1][1] >= cl.lap_distance:
+                            samples.pop()
 
             if cl.invalid:
                 buf.invalid = True
@@ -273,6 +294,11 @@ class Recorder(threading.Thread):
                     "speed": t.get("speed", 0),
                 })
 
+        cars = {str(i): {"role": self._role(i), "lap_num": b.lap_num,
+                         "samples": len(b.samples)}
+                for i, b in self.bufs.items()}
+        self._set_status(cars=cars)
+
     COLUMNS = ("t", "d", "x", "y", "z", "spd", "thr", "brk", "str",
                "gear", "drs", "ot", "rpm", "tfl", "tfr", "trl", "trr",
                "fuel", "ers")
@@ -308,17 +334,31 @@ class Recorder(threading.Thread):
 
     def _finalize(self, idx, buf, lap_time_ms):
         samples = buf.samples
-        if lap_time_ms <= 0 or len(samples) < 50 or self.session_row_id is None:
-            return
+        role = self._role(idx)
+
+        def drop(reason):
+            if role != "player":   # player laps drop for the same reasons, but
+                span = samples[-1][1] - samples[0][1] if samples else 0
+                info = {"role": role, "car": idx, "lap_num": buf.lap_num,
+                        "reason": reason, "lap_time_ms": lap_time_ms,
+                        "samples": len(samples), "span_m": int(span)}
+                self._set_status(last_drop=info)
+                print("[f1lab] dropped %s lap: %s" % (role, info))
+
+        if lap_time_ms <= 0:
+            return drop("no lap time (lap counter jumped or time missing)")
+        if len(samples) < 50:
+            return drop("too few samples")
+        if self.session_row_id is None:
+            return drop("no session row yet")
         span = samples[-1][1] - samples[0][1]
         if self.track_length and span < 0.9 * self.track_length:
-            return  # partial lap (joined mid-lap, pitted, etc.)
+            return drop("partial lap (%dm of %dm)" % (span, self.track_length))
 
-        role = self._role(idx)
         if role != "player":
             key = (role, lap_time_ms)
             if key in self.stored_ghost_times:
-                return
+                return  # same ghost lap repeating; already stored
             self.stored_ghost_times.add(key)
 
         s1, s2 = buf.s1_ms, buf.s2_ms
