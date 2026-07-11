@@ -51,7 +51,9 @@ _MOTION_CAR_2025 = struct.Struct("<ffffffhhhhhhffffff")  # 60 B, g-forces float
 
 
 def parse_motion(data, fmt, wanted):
-    """Return {car_idx: (x, y, z, g_lat, g_long)} for wanted car indices."""
+    """Return {car_idx: (x, y, z, g_lat, g_long, speed_kmh)} for wanted
+    car indices. Speed comes from the world velocity vector — it is
+    genuine even for cars whose CarTelemetry slot is restricted."""
     st = _MOTION_CAR_2026 if fmt >= 2026 else _MOTION_CAR_2025
     out = {}
     for idx in wanted:
@@ -63,7 +65,8 @@ def parse_motion(data, fmt, wanted):
             g_lat, g_long = v[12] / 100.0, v[13] / 100.0
         else:
             g_lat, g_long = v[12], v[13]
-        out[idx] = (v[0], v[1], v[2], g_lat, g_long)
+        spd = (v[3] * v[3] + v[4] * v[4] + v[5] * v[5]) ** 0.5 * 3.6
+        out[idx] = (v[0], v[1], v[2], g_lat, g_long, spd)
     return out
 
 

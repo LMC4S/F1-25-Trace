@@ -70,6 +70,7 @@ class Recorder(threading.Thread):
         self.sess_assists = None   # player assist settings (Session packet)
         self.tt = None             # TimeTrial packet datasets
         self.stored_ghost_times = set()  # (role, lap_time_ms) dedupe
+        self.good_telem = {}       # car_idx -> last genuine telemetry frame
 
     def _set_status(self, **kw):
         with self._status_lock:
@@ -238,13 +239,12 @@ class Recorder(threading.Thread):
                 if cl.current_lap_ms == last[0]:
                     continue  # duplicate frame
                 if cl.current_lap_ms < last[0] or cl.lap_distance < last[1] - 1.0:
-                    span = samples[-1][1] - samples[0][1]
-                    if (idx != self.player_idx and cl.lap_distance < 200 and
-                            self.track_length and
-                            span > 0.9 * self.track_length):
-                        # ghost looping: it restarts its lap at the line
-                        # without incrementing lap_num — that's a completed
-                        # lap, not a flashback
+                    if idx != self.player_idx:
+                        # ghosts don't flashback: any clock or distance
+                        # rewind is the ghost restarting its loop at the
+                        # line (lap_num never increments; a ghost faster
+                        # than the player parks at the line first, so its
+                        # clock wraps while distance is still at the line)
                         self._finalize(idx, buf,
                                        cl.last_lap_ms or samples[-1][0])
                         buf = self.bufs[idx] = LapBuffer(cl.lap_num)
@@ -266,6 +266,18 @@ class Recorder(threading.Thread):
             if m is None:
                 continue  # wait for the first motion packet for this car
             t = self.telem.get(idx) or {}
+            spd = t.get("speed", 0)
+            if idx != self.player_idx and t:
+                # the shadow car's CarTelemetry slot interleaves genuine
+                # frames with a constant flat-out placeholder (~486 km/h,
+                # gear 8, full throttle). Motion velocity is always real:
+                # frames that disagree with it are placeholders — fall back
+                # to the last genuine frame, and take speed from motion
+                if abs(spd - m[5]) > 30:
+                    t = self.good_telem.get(idx) or {}
+                else:
+                    self.good_telem[idx] = t
+                spd = int(round(m[5]))
             st = self.car_status.get(idx) or {}
             t2 = self.telem2.get(idx) or {}
             tt = t.get("tyre_temp") or (0, 0, 0, 0)
@@ -273,7 +285,7 @@ class Recorder(threading.Thread):
                 cl.current_lap_ms,
                 round(cl.lap_distance, 1),
                 round(m[0], 2), round(m[1], 2), round(m[2], 2),
-                t.get("speed", 0),
+                spd,
                 int(round((t.get("throttle") or 0.0) * 100)),
                 int(round((t.get("brake") or 0.0) * 100)),
                 int(round((t.get("steer") or 0.0) * 100)),
@@ -284,6 +296,7 @@ class Recorder(threading.Thread):
                 tt[2], tt[3], tt[0], tt[1],  # order RL,RR,FL,FR on wire; store FL,FR,RL,RR
                 round(st.get("fuel", 0.0), 2),
                 round((st.get("ers_store") or 0.0) / 1e6, 3),
+                1 if t2.get("aero_mode") else 0,  # 2026: X-mode(1)/Z-mode(0)
             ))
 
             if idx == self.player_idx:
@@ -301,7 +314,7 @@ class Recorder(threading.Thread):
 
     COLUMNS = ("t", "d", "x", "y", "z", "spd", "thr", "brk", "str",
                "gear", "drs", "ot", "rpm", "tfl", "tfr", "trl", "trr",
-               "fuel", "ers")
+               "fuel", "ers", "aero")
 
     def _role(self, idx):
         if idx == self.player_idx:
@@ -347,6 +360,10 @@ class Recorder(threading.Thread):
 
         if lap_time_ms <= 0:
             return drop("no lap time (lap counter jumped or time missing)")
+        # a ghost that finishes before the player parks at the line while
+        # the shared lap clock keeps counting — drop that filler tail
+        while samples and samples[-1][0] > lap_time_ms:
+            samples.pop()
         if len(samples) < 50:
             return drop("too few samples")
         if self.session_row_id is None:
@@ -356,12 +373,23 @@ class Recorder(threading.Thread):
             return drop("partial lap (%dm of %dm)" % (span, self.track_length))
 
         if role != "player":
+            # a player restart rewinds the ghost mid-lap; storing that
+            # truncated lap would also poison the (role, time) dedupe
+            if (self.track_length and
+                    samples[-1][1] < self.track_length - 50):
+                return drop("ghost loop interrupted before the line")
             key = (role, lap_time_ms)
             if key in self.stored_ghost_times:
                 return  # same ghost lap repeating; already stored
             self.stored_ghost_times.add(key)
 
         s1, s2 = buf.s1_ms, buf.s2_ms
+        if role != "player" and self.tt:
+            # the ghost's LapData sector fields are junk; the TimeTrial
+            # packet carries the ghost lap's real sector times
+            ds = self.tt.get("rival" if role == "rival" else "personal_best")
+            if ds and ds.get("car_idx") == idx and ds.get("s1_ms"):
+                s1, s2 = ds["s1_ms"], ds["s2_ms"]
         s3 = lap_time_ms - s1 - s2 if s1 and s2 else 0
         cols = {name: [s[i] for s in samples]
                 for i, name in enumerate(self.COLUMNS)}

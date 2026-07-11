@@ -83,7 +83,13 @@ def make_handler(db_path, recorder):
                 self._json({"error": repr(e)}, 500)
 
         def do_DELETE(self):
-            m = re.fullmatch(r"/api/laps/(\d+)", self.path.split("?")[0])
+            path = self.path.split("?")[0]
+            if path == "/api/laps/invalid":
+                con = get_con()
+                cur = con.execute("DELETE FROM laps WHERE valid=0")
+                con.commit()
+                return self._json({"ok": True, "deleted": cur.rowcount})
+            m = re.fullmatch(r"/api/laps/(\d+)", path)
             if m:
                 con = get_con()
                 con.execute("DELETE FROM laps WHERE id=?", (int(m.group(1)),))

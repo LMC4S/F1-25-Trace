@@ -2,9 +2,15 @@
 `examples/spa-lap.md` as real UDP telemetry so the whole pipeline can be
 tested without the game.
 
-Player car (idx 0) drives the lap; the rival ghost (idx 1) drives the
-personal-best columns. Track geometry is synthetic (a plausible closed
-circuit of the right length) since the F1Laps export has no coordinates.
+Player car (idx 0) drives the slower lap; the rival ghost (idx 1) drives
+the faster one and reproduces the real game's shadow-car quirks: it runs
+on the player's lap clock (parking at the line when it finishes first,
+rewinding when the player starts a new lap), its LapData sector fields
+are junk, and its CarTelemetry slot interleaves genuine frames with a
+constant flat-out placeholder (~486 km/h) — only Motion (position +
+velocity) and lapDistance are always genuine, which is exactly what the
+recorder relies on. Track geometry comes from the bundled Spa outline
+since the F1Laps export has no coordinates.
 
 Usage:  python3 tools/fake_game.py [--speedup 20] [--port 20777]
 """
@@ -182,11 +188,11 @@ def lap_data_packet(sim_t, frame, cars):
 def motion_packet(sim_t, frame, positions):
     body = b""
     for i in range(N_CARS):
-        p = positions.get(i)
+        p = positions.get(i)          # (x, z, vel_x, vel_z)
         if p is None:
             body += b"\x00" * MOTION_CAR.size
         else:
-            body += MOTION_CAR.pack(p[0], 0.0, p[1], 0, 0, 0,
+            body += MOTION_CAR.pack(p[0], 0.0, p[1], p[2], 0.0, p[3],
                                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0)
     return header(0, sim_t, frame) + body
 
@@ -282,7 +288,7 @@ def setups_packet(sim_t, frame, active):
 
 def tt_packet(sim_t, frame):
     z = TT_SET.pack(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    rival = TT_SET.pack(1, 2, 109189, 32640, 46317, 30232, 0, 1, 0, 1, 1, 1)
+    rival = TT_SET.pack(1, 2, 108205, 32497, 45799, 29909, 0, 1, 0, 1, 1, 1)
     return header(14, sim_t, frame) + z + z + rival
 
 
@@ -304,8 +310,11 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     dest = (args.host, args.port)
 
-    sectors = {0: (32497, 45799), 1: (32640, 46317)}
-    laps = {0: cur, 1: pb}
+    # the player drives the slower PB columns; the faster lap becomes the
+    # rival ghost, so it finishes first and parks at the line (real-game
+    # shadow-car behaviour)
+    sectors = {0: (32640, 46317)}
+    laps = {0: pb, 1: cur}
     end_t = max(cur.t[-1], pb.t[-1]) * args.laps + 8.0
 
     print("simulating %.0fs of Time Trial at %gx -> udp://%s:%d"
@@ -315,25 +324,33 @@ def main():
     next_session, next_status, next_tt = 0.0, 0.0, 0.0
     while sim_t < end_t:
         cars, positions = {}, {}
+        player_dur = laps[0].t[-1]
         for idx, lap in laps.items():
             lap_dur = lap.t[-1]
-            lap_num = int(sim_t // lap_dur) + 1
-            t_in = sim_t % lap_dur
-            if args.laps == 1 and lap_num > 1 and idx == 0:
-                t_in = min(t_in, 8.0)  # cruise a bit into lap 2 then idle
-            d = lap.dist_at(t_in)
-            vals = lap.at(d)
-            s1, s2 = sectors[idx]
             if idx == 1:
-                # the rival mimics a real TT ghost: it loops the same lap
-                # forever — lap_num never increments, time/distance wrap
+                # real TT rival ghost: it runs on the player's lap clock —
+                # parking at the line once its own lap is done, rewinding
+                # when the player crosses the line; lap_num never
+                # increments and the LapData sector fields are junk
+                t_in = sim_t % player_dur
+                d = lap.dist_at(min(t_in, lap_dur))
+                vals = lap.at(d)
+                if t_in >= lap_dur:
+                    vals.update(spd=0.0, thr=0.0, brk=0.0)  # parked
                 cars[idx] = {
                     "t_ms": int(t_in * 1000), "d": d, "total_d": d,
                     "lap_num": 1,
                     "last_ms": lap.lap_ms if sim_t > lap_dur else 0,
-                    "s1": s1, "s2": s2, **vals,
+                    "s1": 1, "s2": 44, **vals,
                 }
             else:
+                lap_num = int(sim_t // lap_dur) + 1
+                t_in = sim_t % lap_dur
+                if args.laps == 1 and lap_num > 1:
+                    t_in = min(t_in, 8.0)  # cruise a bit into lap 2 then idle
+                d = lap.dist_at(t_in)
+                vals = lap.at(d)
+                s1, s2 = sectors[idx]
                 cars[idx] = {
                     "t_ms": int(t_in * 1000), "d": d,
                     "total_d": (lap_num - 1) * lap_len + d,
@@ -341,7 +358,18 @@ def main():
                     "last_ms": lap.lap_ms if lap_num > 1 else 0,
                     "s1": s1, "s2": s2, **vals,
                 }
-            positions[idx] = pos_of(d)
+            # world position + velocity along the track; Motion stays
+            # genuine even when the telemetry slot carries a placeholder
+            p0, p1 = pos_of(d), pos_of(d + 3.0)
+            hx, hz = p1[0] - p0[0], p1[1] - p0[1]
+            hl = math.hypot(hx, hz) or 1.0
+            v = vals["spd"] / 3.6
+            positions[idx] = (p0[0], p0[1], hx / hl * v, hz / hl * v)
+            if idx == 1 and frame % 2:
+                # the game interleaves a constant flat-out placeholder in
+                # the shadow car's CarTelemetry slot
+                cars[idx].update(spd=486, thr=1.0, brk=0.0, steer=0.0,
+                                 gear=8)
 
         sock.sendto(motion_packet(sim_t, frame, positions), dest)
         sock.sendto(telem_packet(sim_t, frame, cars), dest)

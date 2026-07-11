@@ -18,8 +18,12 @@ const state = {
   viewD: null,       // [d0, d1] focused distance range (map zoom -> charts)
   sort: "recent",    // lap list ordering: recent | fastest
   roleFilter: "all", // all | player | ghost
+  assistFilter: "all", // all | on | off
   hideInvalid: false,
   setupOpen: false,  // setup/assists panel visible
+  folded: new Set(), // collapsed session ids in the lap list
+  hudSteer: true,    // steering section of the telemetry card visible
+  hudPos: null,      // dragged card position {x, y} as stage fractions
 };
 
 /* ---------------------------------------------------------------- color */
@@ -28,6 +32,9 @@ const SEC_COLORS = ["#f87171", "#60a5fa", "#fbbf24"];      // S1 / S2 / S3
 // slow -> fast: viridis body (violet -> blue -> teal -> green) but topped
 // with bright aqua instead of yellow; lightness-monotonic, clear of S1/S2/S3
 const SPEED_RAMP = ["#440154", "#3f4795", "#2a788e", "#27ad82", "#52e6bb", "#b3fff0"];
+// fixed scale: the same speed is the same color on every lap of every
+// track; below SPEED_MIN everything reads as "slow" in the same violet
+const SPEED_MIN = 60, SPEED_MAX = 340;
 // most of a lap sits near top speed; gamma spends more of the ramp up there
 const SPEED_GAMMA = 2.0;
 // track dominance: your color <- neutral -> reference's color
@@ -93,41 +100,434 @@ let TRACKS = null;
 const tracksReady = fetch("tracks.json").then((r) => r.json())
   .then((t) => { TRACKS = t; }).catch(() => {});
 
-/* For laps with no position data (imports): place them on the real outline. */
-function synthCoords(lap) {
-  const tr = TRACKS && TRACKS[lap.track_id];
-  if (!tr) return false;
-  const xs = tr.pts.map((p) => p[0]), zs = tr.pts.map((p) => p[1]);
-  const ds = [0];
-  for (let i = 1; i < xs.length; i++)
-    ds.push(ds[i - 1] + Math.hypot(xs[i] - xs[i - 1], zs[i] - zs[i - 1]));
-  const total = ds[ds.length - 1];
-  const k = total / (lap.track_length || total);  // game metres -> outline metres
-  const s = lap.samples;
-  s.x = s.d.map((d) => interp(ds, xs, Math.min(d * k, total)));
-  s.z = s.d.map((d) => interp(ds, zs, Math.min(d * k, total)));
-  return true;
+/* ------------------------------------------------ track geometry
+   The map is always drawn from the real circuit outline (tracks.json),
+   never from lap telemetry, so the shape, the view and the turn numbers
+   are identical for every lap of a track. A lap's samples are placed on
+   the outline by lap distance. Telemetry is used only once per track, to
+   register the outline against the game: driving direction and where the
+   start line sits on the dataset's loop (curvature cross-correlation). */
+
+const GEOM_STEP = 5;      // metres between resampled outline points
+const geomCache = {};     // track_id -> geom
+
+// official corner counts per game trackId; corner detection tunes its
+// curvature threshold so the numbering matches the published turn count
+const TURN_COUNT = {
+  0: 14, 2: 16, 3: 15, 4: 14, 5: 19, 6: 14, 7: 18, 9: 14, 10: 19, 11: 11,
+  12: 19, 13: 18, 14: 16, 15: 20, 16: 15, 17: 10, 19: 17, 20: 20, 26: 14,
+  27: 19, 29: 27, 30: 19, 31: 17, 32: 16, 42: 22,
+  39: 18, 40: 10, 41: 14,   // reverse layouts
+};
+
+function trackGeom(tid) {
+  if (geomCache[tid]) return geomCache[tid];
+  const tr = TRACKS && TRACKS[tid];
+  if (!tr) return null;
+  const geom = resampleLoop(tr.pts, GEOM_STEP);
+  // fixed per-track rotation: lay the long axis horizontally so the
+  // track fills the wide stage instead of a sliver of it (north-up is
+  // sacrificed; every lap of a track still shares the same frame)
+  rotateGeom(geom, bestRotation(geom.xs, geom.zs));
+  geom.version = 0;
+  geom.xform = null;   // affine game->outline map (set by calibration)
+  try {
+    // "cal2": xform is fitted in the rotated frame, older entries are not
+    const cal = JSON.parse(localStorage.getItem("f1lab.cal2." + tid));
+    if (cal && "m" in cal) {
+      applyCal(geom, cal);
+      geom.xform = cal.m;
+      geom.calibrated = true;
+    }
+  } catch (e) { /* no saved calibration */ }
+  geomNormals(geom);
+  geom.corners = outlineCorners(geom, TURN_COUNT[tid]);
+  geomCache[tid] = geom;
+  return geom;
+}
+
+/* Angle (±90°) that best fills a typical wide stage, judged by the
+   fitted scale min(aspect/width, 1/height); ties prefer least rotation. */
+function bestRotation(xs, zs) {
+  const ASPECT = 2.2;
+  let best = 0, bestScore = -1;
+  for (let d = 0; d <= 90; d += 2) {
+    for (const deg of d === 0 ? [0] : [d, -d]) {
+      const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+      let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
+      for (let i = 0; i < xs.length; i += 3) {
+        const x = xs[i] * c - zs[i] * s;
+        const z = xs[i] * s + zs[i] * c;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+      }
+      const score = Math.min(ASPECT / (maxX - minX), 1 / (maxZ - minZ));
+      if (score > bestScore) { bestScore = score; best = a; }
+    }
+  }
+  return best;
+}
+
+function rotateGeom(geom, a) {
+  const c = Math.cos(a), s = Math.sin(a), { xs, zs, n } = geom;
+  for (let i = 0; i < n; i++) {
+    const x = xs[i], z = zs[i];
+    xs[i] = x * c - z * s;
+    zs[i] = x * s + z * c;
+  }
+}
+
+/* Unit normals of the outline at every grid point. */
+function geomNormals(geom) {
+  const { xs, zs, n } = geom;
+  const nx = new Float64Array(n), nz = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = (i + n - 1) % n, b = (i + 1) % n;
+    const tx = xs[b] - xs[a], tz = zs[b] - zs[a];
+    const l = Math.hypot(tx, tz) || 1;
+    nx[i] = -tz / l; nz[i] = tx / l;
+  }
+  geom.nx = nx; geom.nz = nz;
+}
+
+/* Outline points -> uniform grid, one point every ~GEOM_STEP metres. */
+function resampleLoop(pts, step) {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++)
+    cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0],
+                                     pts[i][1] - pts[i - 1][1]));
+  const total = cum[cum.length - 1];
+  const n = Math.max(16, Math.round(total / step));
+  const st = total / n;
+  const xs = new Float64Array(n), zs = new Float64Array(n);
+  let j = 0;
+  for (let i = 0; i < n; i++) {
+    const s = i * st;
+    while (j < cum.length - 2 && cum[j + 1] < s) j++;
+    const f = (s - cum[j]) / (cum[j + 1] - cum[j] || 1);
+    xs[i] = pts[j][0] + (pts[j + 1][0] - pts[j][0]) * f;
+    zs[i] = pts[j][1] + (pts[j + 1][1] - pts[j][1]) * f;
+  }
+  return { xs, zs, n, step: st, total };
+}
+
+/* Signed curvature (rad/m) at every grid point, lightly smoothed. */
+function loopKappa(xs, zs, step) {
+  const n = xs.length, head = new Float64Array(n), kap = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    head[i] = Math.atan2(zs[j] - zs[i], xs[j] - xs[i]);
+  }
+  for (let i = 0; i < n; i++) {
+    let dh = head[i] - head[(i + n - 1) % n];
+    while (dh > Math.PI) dh -= 2 * Math.PI;
+    while (dh < -Math.PI) dh += 2 * Math.PI;
+    kap[i] = dh / step;
+  }
+  const sm = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let a = 0;
+    for (let w = -2; w <= 2; w++) a += kap[(i + w + n) % n];
+    sm[i] = a / 5;
+  }
+  return sm;
+}
+
+/* Corner segments at curvature threshold th: contiguous same-sign runs
+   (a chicane = two corners), short gaps bridged, tiny kinks dropped. */
+function segmentCorners(kap, step, th) {
+  const n = kap.length;
+  let anchor = 0;               // start the circular walk on a straight
+  for (let i = 0; i < n; i++) if (Math.abs(kap[i]) <= th) { anchor = i; break; }
+  const raw = [];
+  let q0 = -1, sign = 0;
+  for (let q = 1; q <= n; q++) {
+    const v = kap[(anchor + q) % n];
+    const sg = Math.abs(v) > th ? (v > 0 ? 1 : -1) : 0;
+    if (sg === sign) continue;
+    if (sign !== 0) raw.push({ q0, q1: q - 1, sign });
+    q0 = q; sign = sg;
+  }
+  if (sign !== 0) raw.push({ q0, q1: n, sign });
+  const merged = [];            // bridge short straights inside one corner
+  for (const s of raw) {
+    const p = merged[merged.length - 1];
+    if (p && p.sign === s.sign && (s.q0 - p.q1) * step < 25) p.q1 = s.q1;
+    else merged.push({ q0: s.q0, q1: s.q1, sign: s.sign });
+  }
+  const out = [];
+  const kq = (q) => kap[(anchor + q) % n];
+  const emit = (a, b) => {
+    let ang = 0, apexQ = a;
+    for (let q = a; q <= b; q++) {
+      ang += kq(q) * step;
+      if (Math.abs(kq(q)) > Math.abs(kq(apexQ))) apexQ = q;
+    }
+    if ((b - a + 1) * step >= 15 && Math.abs(ang) >= 0.12)
+      out.push({ i0: (anchor + a) % n, i1: (anchor + b) % n,
+                 apex: (anchor + apexQ) % n, ang });
+  };
+  // a long same-sign sweep can be several numbered turns (Shanghai T1-T2);
+  // split recursively at a clear interior curvature dip well away from
+  // both apexes, with a real corner's worth of angle on each side
+  const split = (a, b) => {
+    let dip = -1;
+    for (let q = a + 8; q <= b - 8; q++)
+      if (dip < 0 || Math.abs(kq(q)) < Math.abs(kq(dip))) dip = q;
+    if (dip >= 0) {
+      let pl = 0, pr = 0, al = 0, ar = 0;
+      for (let q = a; q <= dip; q++) {
+        pl = Math.max(pl, Math.abs(kq(q))); al += kq(q) * step;
+      }
+      for (let q = dip + 1; q <= b; q++) {
+        pr = Math.max(pr, Math.abs(kq(q))); ar += kq(q) * step;
+      }
+      if (Math.abs(kq(dip)) < 0.5 * Math.min(pl, pr) &&
+          Math.abs(al) >= 0.2 && Math.abs(ar) >= 0.2) {
+        split(a, dip); split(dip + 1, b);
+        return;
+      }
+    }
+    emit(a, b);
+  };
+  for (const s of merged) split(s.q0, s.q1);
+  return out;
+}
+
+/* Corners of the outline, numbered in driving order from the start line.
+   Unmistakable corners (tight radius) are found first; when the official
+   turn count is known, progressively weaker thresholds fill the remaining
+   numbering slots — that's how fast officially-numbered sweeps like Eau
+   Rouge get in without sharp corners drowning in noise. */
+function outlineCorners(geom, target) {
+  const st = geom.step, n = geom.n, L = geom.total;
+  const kap = loopKappa(geom.xs, geom.zs, st);
+  const arcs = (s) => ({
+    s0: s.i0 * st,
+    s1: (s.i1 >= s.i0 ? s.i1 : s.i1 + n) * st,
+    apexS: (s.apex >= s.i0 ? s.apex : s.apex + n) * st,
+    ang: s.ang,
+  });
+  const finalize = (cs) => {
+    cs.sort((a, b) => (a.apexS % L) - (b.apexS % L));
+    cs.forEach((c, i) => { c.n = i + 1; });
+    return cs;
+  };
+  if (!target) return finalize(segmentCorners(kap, st, 1 / 220).map(arcs));
+  const inSeg = (p, s) => {   // does segment s cover arc position p?
+    let q = p % L;
+    if (q < s.s0) q += L;
+    return q <= s.s1;
+  };
+  const chosen = [];
+  for (const th of [1 / 60, 1 / 110, 1 / 180, 1 / 300, 1 / 500, 1 / 800]) {
+    if (chosen.length >= target) break;
+    const cands = segmentCorners(kap, st, th).map(arcs)
+      .sort((a, b) => Math.abs(b.ang) - Math.abs(a.ang));
+    for (const c of cands) {
+      if (chosen.length >= target) break;
+      const dup = chosen.some((x) => {
+        let d = Math.abs((x.apexS % L) - (c.apexS % L));
+        d = Math.min(d, L - d);
+        return inSeg(x.apexS, c) || inSeg(c.apexS, x) ||
+               (d < 50 && x.ang * c.ang > 0);
+      });
+      if (!dup) chosen.push(c);
+    }
+  }
+  return finalize(chosen);
+}
+
+/* One-time registration of the outline against game telemetry: find the
+   driving direction and start-line offset whose curvature profile best
+   matches the lap's. Result is saved, so the map never shifts again. */
+function calibrateGeom(geom, lap, tid) {
+  const s = lap.samples, n = geom.n, step = geom.step;
+  const k = geom.total / (lap.track_length || s.d[s.d.length - 1]);
+  const maxD = s.d[s.d.length - 1];
+  const tk = new Float64Array(n);
+  let prev = null, tn2 = 0;
+  for (let i = 0; i < n; i++) {
+    const d1 = ((i + 1) * step) / k;
+    if (d1 > maxD) break;
+    const d0 = (i * step) / k;
+    const h = Math.atan2(interp(s.d, s.z, d1) - interp(s.d, s.z, d0),
+                         interp(s.d, s.x, d1) - interp(s.d, s.x, d0));
+    if (prev !== null) {
+      let dh = h - prev;
+      while (dh > Math.PI) dh -= 2 * Math.PI;
+      while (dh < -Math.PI) dh += 2 * Math.PI;
+      tk[i] = dh / step; tn2 += tk[i] * tk[i];
+    }
+    prev = h;
+  }
+  let best = { score: 0, rev: 0, off: 0 };
+  for (const rev of [0, 1]) {
+    let xs = geom.xs, zs = geom.zs;
+    if (rev) { xs = xs.slice().reverse(); zs = zs.slice().reverse(); }
+    const ok = loopKappa(xs, zs, step);
+    let on2 = 0;
+    for (let i = 0; i < n; i++) on2 += ok[i] * ok[i];
+    const okD = new Float64Array(2 * n);
+    okD.set(ok); okD.set(ok, n);
+    const norm = Math.sqrt(on2 * tn2) || 1;
+    for (let off = 0; off < n; off++) {
+      let c = 0;
+      for (let i = 0; i < n; i++) c += okD[off + i] * tk[i];
+      c = Math.abs(c) / norm;
+      if (c > best.score) best = { score: c, rev, off };
+    }
+  }
+  geom.calibrated = true;        // don't retry on every lap load
+  if (best.score < 0.45) return; // telemetry doesn't look like this track
+  applyCal(geom, best);
+  geomNormals(geom);
+  geom.version++;
+  geom.corners = outlineCorners(geom, TURN_COUNT[tid]);
+  // affine registration game -> outline: with it, the lap's genuine
+  // lateral line can be drawn around the fixed centerline
+  const pairs = [];
+  for (let i = 0; i < n; i += 4) {
+    const d = (i * step) / k;
+    if (d > maxD) break;
+    pairs.push([interp(s.d, s.x, d), interp(s.d, s.z, d),
+                geom.xs[i], geom.zs[i]]);
+  }
+  geom.xform = affineFit(pairs);
+  try {
+    localStorage.setItem("f1lab.cal2." + tid, JSON.stringify(
+      { rev: best.rev, off: best.off, m: geom.xform }));
+  } catch (e) { /* private mode etc. */ }
+}
+
+/* Least-squares affine map [gx, gz] -> [a b c; d e f] applied to (x, z),
+   or null when the fit is too loose to trust. */
+function affineFit(pairs) {
+  const N = pairs.length;
+  if (N < 40) return null;
+  let mx = 0, mz = 0, mu = 0, mv = 0;
+  for (const p of pairs) { mx += p[0]; mz += p[1]; mu += p[2]; mv += p[3]; }
+  mx /= N; mz /= N; mu /= N; mv /= N;
+  let sxx = 0, sxz = 0, szz = 0, sxu = 0, szu = 0, sxv = 0, szv = 0;
+  for (const p of pairs) {
+    const x = p[0] - mx, z = p[1] - mz, u = p[2] - mu, v = p[3] - mv;
+    sxx += x * x; sxz += x * z; szz += z * z;
+    sxu += x * u; szu += z * u; sxv += x * v; szv += z * v;
+  }
+  const det = sxx * szz - sxz * sxz;
+  if (Math.abs(det) < 1e-6) return null;
+  const a = (sxu * szz - szu * sxz) / det, b = (szu * sxx - sxu * sxz) / det;
+  const d = (sxv * szz - szv * sxz) / det, e = (szv * sxx - sxv * sxz) / det;
+  const c = mu - a * mx - b * mz, f = mv - d * mx - e * mz;
+  let err = 0;
+  for (const p of pairs) {
+    const ru = a * p[0] + b * p[1] + c - p[2];
+    const rv = d * p[0] + e * p[1] + f - p[3];
+    err += ru * ru + rv * rv;
+  }
+  // reject a sloppy registration: better no line offsets than wrong ones
+  if (Math.sqrt(err / N) > 45) return null;
+  return [a, b, c, d, e, f];
+}
+
+function applyCal(geom, cal) {
+  let xs = geom.xs, zs = geom.zs;
+  if (cal.rev) { xs = xs.slice().reverse(); zs = zs.slice().reverse(); }
+  const n = geom.n, o = ((cal.off % n) + n) % n;
+  const rot = (a) => {
+    const out = new Float64Array(n);
+    for (let i = 0; i < n; i++) out[i] = a[(i + o) % n];
+    return out;
+  };
+  geom.xs = rot(xs); geom.zs = rot(zs);
+}
+
+/* Place a lap's samples on the outline by lap distance. When the track is
+   registered (affine game->outline fit), the lap's genuine lateral line is
+   kept: the high-frequency part of its offset from the centerline is
+   re-applied around the outline, so a zoomed-in map shows the real line. */
+function synthCoords(lap, geom) {
+  const s = lap.samples, n = geom.n;
+  const k = geom.total / (lap.track_length || geom.total);
+  if (!lap.rawX) { lap.rawX = s.x; lap.rawZ = s.z; }  // pre-synth coords
+  const off = lineOffsets(lap, geom, k);
+  const N = s.d.length, xs = new Array(N), zs = new Array(N);
+  for (let i = 0; i < N; i++) {
+    const a = (s.d[i] * k) / geom.step;
+    const i0 = Math.floor(a) % n, f = a - Math.floor(a), i1 = (i0 + 1) % n;
+    const o = off ? off[i] : 0;
+    xs[i] = geom.xs[i0] + (geom.xs[i1] - geom.xs[i0]) * f +
+            o * (geom.nx[i0] + (geom.nx[i1] - geom.nx[i0]) * f);
+    zs[i] = geom.zs[i0] + (geom.zs[i1] - geom.zs[i0]) * f +
+            o * (geom.nz[i0] + (geom.nz[i1] - geom.nz[i0]) * f);
+  }
+  s.x = xs; s.z = zs;
+  lap.geomVersion = geom.version;
+}
+
+/* Signed lateral offset of the driven line vs the outline centerline,
+   high-pass filtered along lap distance: the slow component is outline-vs-
+   game geometry mismatch, the fast component is actual line choice. */
+function lineOffsets(lap, geom, k) {
+  if (!geom.xform) return null;
+  const s = lap.samples, X = lap.rawX, Z = lap.rawZ, N = s.d.length;
+  let minX = 1e9, maxX = -1e9;
+  for (let i = 0; i < N; i++) {
+    if (X[i] < minX) minX = X[i]; if (X[i] > maxX) maxX = X[i];
+  }
+  if (maxX - minX < 50) return null;   // no position data (imports)
+  const [a, b, c, d, e, f] = geom.xform, n = geom.n;
+  const raw = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    const gx = a * X[i] + b * Z[i] + c;
+    const gz = d * X[i] + e * Z[i] + f;
+    const t = (s.d[i] * k) / geom.step;
+    const i0 = Math.floor(t) % n, ff = t - Math.floor(t), i1 = (i0 + 1) % n;
+    const cx = geom.xs[i0] + (geom.xs[i1] - geom.xs[i0]) * ff;
+    const cz = geom.zs[i0] + (geom.zs[i1] - geom.zs[i0]) * ff;
+    const nx = geom.nx[i0] + (geom.nx[i1] - geom.nx[i0]) * ff;
+    const nz = geom.nz[i0] + (geom.nz[i1] - geom.nz[i0]) * ff;
+    raw[i] = (gx - cx) * nx + (gz - cz) * nz;
+  }
+  // high-pass: subtract the moving average over ±110 m, clamp to the road
+  const out = new Float64Array(N);
+  let lo = 0, hi = 0, sum = 0;
+  for (let i = 0; i < N; i++) {
+    while (hi < N && s.d[hi] <= s.d[i] + 110) { sum += raw[hi]; hi++; }
+    while (s.d[lo] < s.d[i] - 110) { sum -= raw[lo]; lo++; }
+    out[i] = Math.max(-5.5, Math.min(5.5, raw[i] - sum / (hi - lo)));
+  }
+  return out;
 }
 
 /* Prepare a loaded lap: clean samples, build lookups. */
 function prepLap(lap) {
   const s = lap.samples;
-  // keep only strictly increasing distance (drops any flashback residue)
+  // keep only strictly increasing time AND distance: interp() binary-
+  // searches both, so flashback residue or a ghost's wrapped clock at the
+  // end of a stored lap would otherwise derail every lookup
   const keep = [];
-  let lastD = -1;
+  let lastD = -1, lastT = -1;
   for (let i = 0; i < s.d.length; i++) {
-    if (s.d[i] > lastD) { keep.push(i); lastD = s.d[i]; }
+    if (s.d[i] > lastD && s.t[i] > lastT) {
+      keep.push(i); lastD = s.d[i]; lastT = s.t[i];
+    }
   }
   if (keep.length !== s.d.length) {
     for (const k of Object.keys(s)) s[k] = keep.map((i) => s[k][i]);
   }
-  // no position data? (all coords near-constant) -> use the real outline
-  let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
-  for (let i = 0; i < s.x.length; i++) {
-    if (s.x[i] < minX) minX = s.x[i]; if (s.x[i] > maxX) maxX = s.x[i];
-    if (s.z[i] < minZ) minZ = s.z[i]; if (s.z[i] > maxZ) maxZ = s.z[i];
+  const geom = trackGeom(lap.track_id);
+  if (geom) {
+    // a lap with real position data registers the outline, once per track
+    let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
+    for (let i = 0; i < s.x.length; i++) {
+      if (s.x[i] < minX) minX = s.x[i]; if (s.x[i] > maxX) maxX = s.x[i];
+      if (s.z[i] < minZ) minZ = s.z[i]; if (s.z[i] > maxZ) maxZ = s.z[i];
+    }
+    if (Math.max(maxX - minX, maxZ - minZ) >= 50 && !geom.calibrated)
+      calibrateGeom(geom, lap, lap.track_id);
+    synthCoords(lap, geom);   // every lap sits on the same outline
   }
-  if (Math.max(maxX - minX, maxZ - minZ) < 50) lap.approxMap = synthCoords(lap);
   lap.duration = lap.lap_time_ms || s.t[s.t.length - 1];
   lap.maxD = s.d[s.d.length - 1];
   // sector boundary distances, derived from sector times
@@ -181,7 +581,11 @@ function computeCorners(lap) {
   return corners;
 }
 
-/* Per-corner time gained/lost vs the reference (braking zone included). */
+/* Per-corner time gained/lost vs the reference. The lap is segmented at
+   each corner's braking point: corner i owns brake_i -> brake_(i+1), so a
+   slow exit is charged to the corner that caused it (its cost lives on
+   the straight that follows) and the per-corner deltas add up to the
+   full-lap delta — nothing significant can hide between corners. */
 function cornerDeltas() {
   const A = state.lapA, B = state.lapB;
   const maxD = Math.min(A.maxD, B.maxD);
@@ -189,10 +593,57 @@ function cornerDeltas() {
     d = Math.min(d, maxD);
     return interp(A.samples.d, A.samples.t, d) - interp(B.samples.d, B.samples.t, d);
   };
-  for (const c of A.corners) {
-    const d0 = Math.max(0, c.startD - 80), d1 = Math.min(A.maxD, c.endD + 40);
-    c.loss = (del(d1) - del(d0)) / 1000;   // s: + = lost time, - = gained
+  const cs = A.corners;
+  for (let i = 0; i < cs.length; i++) {
+    const d0 = Math.max(0, cs[i].startD - 80);
+    const d1 = i + 1 < cs.length ? Math.max(0, cs[i + 1].startD - 80) : A.maxD;
+    cs[i].loss = (del(d1) - del(d0)) / 1000;   // s: + = lost time, - = gained
   }
+}
+
+/* ------------------------------------------------- themed dropdowns
+   Wraps a native <select> in a styled button + menu. The select stays in
+   the DOM (hidden) as the source of truth, so existing code that rebuilds
+   its options or reads/sets .value keeps working unchanged. */
+function styleSelect(sel) {
+  const wrap = document.createElement("div");
+  wrap.className = "dd";
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.appendChild(sel);
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "dd-btn";
+  const menu = document.createElement("div");
+  menu.className = "dd-menu";
+  wrap.append(btn, menu);
+  const sync = () => {
+    const o = sel.options[sel.selectedIndex];
+    btn.innerHTML = `<span>${o ? o.text : "—"}</span><b class="dd-arr">▾</b>`;
+  };
+  const close = () => wrap.classList.remove("open");
+  const open = () => {
+    menu.innerHTML = "";
+    for (const o of sel.options) {
+      const it = document.createElement("div");
+      it.className = "dd-item" + (o.index === sel.selectedIndex ? " sel" : "");
+      it.textContent = o.text;
+      it.addEventListener("click", () => {
+        sel.value = o.value;
+        sel.dispatchEvent(new Event("change"));
+        close(); sync();
+      });
+      menu.appendChild(it);
+    }
+    wrap.classList.add("open");
+  };
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (wrap.classList.contains("open")) close(); else open();
+  });
+  document.addEventListener("click", close);
+  sel.addEventListener("change", sync);
+  // options rebuilt / value set programmatically (e.g. loadTracks)
+  new MutationObserver(sync).observe(sel, { childList: true });
+  sync();
 }
 
 /* ---------------------------------------------------------------- header / status */
@@ -278,17 +729,17 @@ function roleBadge(role) {
   return `<span class="badge ${role}">${label}</span>`;
 }
 
-/* Short badges for assist settings: only what differs from "no assists". */
-function assistBadges(a) {
-  if (!a) return "";
-  const tags = [];
-  if (a.tc) tags.push("TC" + a.tc);                 // 1 medium, 2 full
-  if (a.abs) tags.push("ABS");
-  if (a.gearbox >= 3) tags.push("AUTO");
-  if (a.racing_line) tags.push("LINE");
-  if (a.brake_assist) tags.push("BRK-A");
-  if (a.steer_assist) tags.push("STR-A");
-  return tags.map((t) => `<span class="asst">${t}</span>`).join("");
+/* Any driving aid active? true / false / null (not recorded, older laps). */
+function assistsOn(a) {
+  if (!a) return null;
+  return !!(a.tc || a.abs || a.gearbox >= 3 || a.racing_line ||
+            a.brake_assist || a.steer_assist);
+}
+
+/* One on/off badge; the details live in the SETUP panel + hover title. */
+function assistBadge(lap) {
+  return assistsOn(lap.assists)
+    ? `<span class="asst" title="${assistLine(lap.assists)}">ASSISTS</span>` : "";
 }
 
 function visibleLaps() {
@@ -297,6 +748,9 @@ function visibleLaps() {
     laps = laps.filter((l) => l.car_role === "player");
   else if (state.roleFilter === "ghost")
     laps = laps.filter((l) => l.car_role !== "player");
+  if (state.assistFilter !== "all")
+    laps = laps.filter((l) =>
+      assistsOn(l.assists) === (state.assistFilter === "on"));
   if (state.hideInvalid) laps = laps.filter((l) => l.valid);
   if (state.sort === "fastest")
     laps.sort((a, b) => (a.lap_time_ms || 1e12) - (b.lap_time_ms || 1e12));
@@ -324,11 +778,21 @@ function renderLapList() {
   laps.forEach((lap, i) => {
     if (!ranked && lap.session_id !== lastSession) {
       lastSession = lap.session_id;
+      const sid = lap.session_id;
+      const folded = state.folded.has(sid);
       const head = document.createElement("div");
-      head.className = "sess-head";
-      head.textContent = fmtSession(lap);
+      head.className = "sess-head" + (folded ? " folded" : "");
+      const n = laps.filter((l) => l.session_id === sid).length;
+      head.innerHTML = `<span class="tri">${folded ? "▸" : "▾"}</span>` +
+        fmtSession(lap) + (folded ? ` · ${n} lap${n === 1 ? "" : "s"}` : "");
+      head.addEventListener("click", () => {
+        if (state.folded.has(sid)) state.folded.delete(sid);
+        else state.folded.add(sid);
+        renderLapList();
+      });
       box.appendChild(head);
     }
+    if (!ranked && state.folded.has(lap.session_id)) return;
     const row = document.createElement("div");
     row.className = "lap-row";
     if (state.lapA && lap.id === state.lapA.id) row.classList.add("sel");
@@ -347,7 +811,7 @@ function renderLapList() {
         <div class="lap-time">${fmtTime(lap.lap_time_ms, 1)} ${gap}
           ${lap.id === bestId ? '<span class="pb">BEST</span>' : ""}
           ${lap.valid ? "" : '<span class="inv">INV</span>'}
-          ${assistBadges(lap.assists)}</div>
+          ${assistBadge(lap)}</div>
         <div class="lap-sub">${sub}</div>
       </div>
       <button class="refbtn ${isRef ? "on" : ""}"
@@ -398,18 +862,25 @@ function fitMap() {
   const dpr = window.devicePixelRatio || 1;
   map.width = map.clientWidth * dpr; map.height = map.clientHeight * dpr;
   let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
-  for (const lap of laps) {
+  const geom = trackGeom(laps[0].track_id);
+  if (geom) {   // frame the fixed outline: identical view for every lap
+    for (let i = 0; i < geom.n; i++) {
+      if (geom.xs[i] < minX) minX = geom.xs[i];
+      if (geom.xs[i] > maxX) maxX = geom.xs[i];
+      if (geom.zs[i] < minZ) minZ = geom.zs[i];
+      if (geom.zs[i] > maxZ) maxZ = geom.zs[i];
+    }
+  } else for (const lap of laps) {
     const s = lap.samples;
     for (let i = 0; i < s.x.length; i++) {
       if (s.x[i] < minX) minX = s.x[i]; if (s.x[i] > maxX) maxX = s.x[i];
       if (s.z[i] < minZ) minZ = s.z[i]; if (s.z[i] > maxZ) maxZ = s.z[i];
     }
   }
-  // padding leaves room for corner badges, the legend row and the toolbar
+  // padding leaves room for corner badges, the legend row and the toolbar;
+  // the TIMING/TELEMETRY cards float over the map's (mostly empty) corners
   const pad = 58 * dpr, padT = 64 * dpr, padB = 78 * dpr;
-  // keep the track clear of the HUD panel when there's room for both
-  const hudReserve = map.clientWidth >= 900 ? 410 * dpr : 0;
-  const w = map.width - 2 * pad - hudReserve, h = map.height - padT - padB;
+  const w = map.width - 2 * pad, h = map.height - padT - padB;
   const scale = Math.min(w / (maxX - minX || 1), h / (maxZ - minZ || 1));
   view = {
     scale, dpr, baseScale: scale,
@@ -456,6 +927,16 @@ function pathStroke(lap, i0, i1, color, width, alpha) {
 function fullStroke(lap, color, width, alpha) {
   pathStroke(lap, 0, lap.samples.x.length - 1, color, width, alpha);
 }
+function outlineStroke(geom, color, width, alpha) {
+  dctx.beginPath();
+  dctx.moveTo(W2X(geom.xs[0]), W2Y(geom.zs[0]));
+  for (let i = 1; i < geom.n; i++) dctx.lineTo(W2X(geom.xs[i]), W2Y(geom.zs[i]));
+  dctx.closePath();
+  dctx.globalAlpha = alpha == null ? 1 : alpha;
+  dctx.strokeStyle = color; dctx.lineWidth = width * view.dpr;
+  dctx.lineJoin = "round"; dctx.lineCap = "round";
+  dctx.stroke(); dctx.globalAlpha = 1;
+}
 function rangeStroke(lap, d0, d1, color, width, alpha) {
   pathStroke(lap, lowerIdx(lap.samples.d, d0), lowerIdx(lap.samples.d, d1),
              color, width, alpha);
@@ -476,15 +957,10 @@ function computeLineColors(A) {
       colors[i] = ramp(GAP_RAMP, 0.5 + slope / 4);
     }
   } else {
-    let mn = 1e9, mx = 0;
-    for (let i = 0; i < n; i++) {
-      if (s.spd[i] < mn) mn = s.spd[i];
-      if (s.spd[i] > mx) mx = s.spd[i];
-    }
-    A.spdRange = [mn, mx];
     for (let i = 0; i < n; i++)
-      colors[i] = ramp(SPEED_RAMP,
-        Math.pow((s.spd[i] - mn) / (mx - mn || 1), SPEED_GAMMA));
+      colors[i] = ramp(SPEED_RAMP, Math.pow(
+        Math.max(0, s.spd[i] - SPEED_MIN) / (SPEED_MAX - SPEED_MIN),
+        SPEED_GAMMA));
   }
   A.lineColors = colors;
 }
@@ -506,21 +982,34 @@ function renderMapStatic() {
   dctx = mapStatic.getContext("2d");
   const A = state.lapA, dpr = view.dpr, s = A.samples;
 
-  // ribbon: neutral edge under a dark road surface; the colored S2/S3
-  // gates alone mark the sectors (full sector tinting was too loud)
-  fullStroke(A, "#282c35", 12.5, 0.9);
-  fullStroke(A, "#101318", 9);
+  // ribbon: neutral edge under a dark road surface, drawn from the fixed
+  // circuit outline when we have one; the colored S2/S3 gates alone mark
+  // the sectors. Widths switch to true scale (a ~14 m road) once zoomed
+  // far enough that that is wider than the stylised base width.
+  const mpx = view.scale / dpr;   // logical px per metre
+  const geom = trackGeom(A.track_id);
+  if (geom) {
+    outlineStroke(geom, "#3a4150", Math.max(12.5, 15 * mpx), 0.9);
+    outlineStroke(geom, "#1b202a", Math.max(9, 13 * mpx));
+  } else {
+    fullStroke(A, "#3a4150", Math.max(12.5, 15 * mpx), 0.9);
+    fullStroke(A, "#1b202a", Math.max(9, 13 * mpx));
+    if (state.lapB) fullStroke(state.lapB, "rgba(251,146,60,.25)", 1.5);
+  }
 
-  if (state.lapB) fullStroke(state.lapB, "rgba(251,146,60,.25)", 1.5);
+  // reference lap's line under the viewed lap's, for line comparison
+  if (geom && state.lapB)
+    fullStroke(state.lapB, "rgba(251,146,60,.55)", Math.max(1.5, 1.2 * mpx));
 
-  // racing line colored by speed / gap
+  // racing line colored by speed / gap; true car width when zoomed
+  const lineW = Math.max(2.6, 1.9 * mpx) * dpr;
   const stepN = Math.max(1, Math.floor(s.x.length / 900));
   for (let i = stepN; i < s.x.length; i += stepN) {
     dctx.beginPath();
     dctx.moveTo(W2X(s.x[i - stepN]), W2Y(s.z[i - stepN]));
     dctx.lineTo(W2X(s.x[i]), W2Y(s.z[i]));
     dctx.strokeStyle = A.lineColors[i];
-    dctx.lineWidth = 2.6 * dpr; dctx.lineCap = "round";
+    dctx.lineWidth = lineW; dctx.lineCap = "round";
     dctx.stroke();
   }
 
@@ -572,11 +1061,11 @@ function renderMapStatic() {
 
   // biggest time losses / gains vs reference -> badges at the corners
   if (state.lapB && A.corners && A.corners.length) {
+    // badge every corner that moves the needle, losses and gains alike;
+    // the cap only guards readability on a wreck of a lap
     const ranked = A.corners.filter((c) => c.loss != null)
-      .sort((a, b) => b.loss - a.loss);
-    const badges = ranked.filter((c) => c.loss > 0.05).slice(0, 3);
-    const gain = ranked[ranked.length - 1];
-    if (gain && gain.loss < -0.08) badges.push(gain);
+      .sort((a, b) => Math.abs(b.loss) - Math.abs(a.loss));
+    const badges = ranked.filter((c) => Math.abs(c.loss) >= 0.1).slice(0, 8);
     dctx.font = "800 " + 10 * dpr + "px sans-serif";
     for (const c of badges) {
       const o = outward(c.apexD);
@@ -607,13 +1096,17 @@ function drawMap() {
   const A = state.lapA, dpr = view.dpr, s = A.samples;
   if (mapStatic && mapStatic.width) mctx.drawImage(mapStatic, 0, 0);
 
+  // dots grow to roughly car size once the zoom makes that bigger
+  const rA = Math.max(8 * dpr, 1.6 * view.scale);
+  const rB = Math.max(7 * dpr, 1.4 * view.scale);
+
   // ghost dot (reference lap at same elapsed time)
   if (state.lapB) {
     const B = state.lapB, tB = Math.min(state.t, B.duration);
     const bx = interp(B.samples.t, B.samples.x, tB);
     const bz = interp(B.samples.t, B.samples.z, tB);
     mctx.beginPath();
-    mctx.arc(W2X(bx), W2Y(bz), 7 * dpr, 0, 7);
+    mctx.arc(W2X(bx), W2Y(bz), rB, 0, 7);
     mctx.fillStyle = "#fb923c"; mctx.globalAlpha = 0.85; mctx.fill();
     mctx.globalAlpha = 1;
   }
@@ -621,7 +1114,7 @@ function drawMap() {
   // player dot
   const ax = interp(s.t, s.x, state.t), az = interp(s.t, s.z, state.t);
   mctx.beginPath();
-  mctx.arc(W2X(ax), W2Y(az), 8 * dpr, 0, 7);
+  mctx.arc(W2X(ax), W2Y(az), rA, 0, 7);
   mctx.fillStyle = "#22d3ee";
   mctx.strokeStyle = "#0b0e13"; mctx.lineWidth = 2 * dpr;
   mctx.shadowColor = "#22d3ee"; mctx.shadowBlur = 14 * dpr;
@@ -760,7 +1253,9 @@ map.addEventListener("wheel", (e) => {
 
 /* ---------------------------------------------------------------- halo hud */
 
-const HALO = { cx: 285, cy: 105, r: 84 };
+/* Original halo cluster (arcs around the speed dial), with the steering
+   section stacked on top; the whole card floats and can be dragged. */
+const HALO = { cx: 155, cy: 300, r: 84 };
 const THR = { from: 230, to: 130 };   // left side, fills bottom -> top
 const BRK = { from: -50, to: 50 };    // right side, fills bottom -> top
 const N_REV = 15;
@@ -795,12 +1290,12 @@ function initHalo() {
       ticks.appendChild(ln);
     }
   }
-  // rev-light strip
+  // rev-light strip, just above the arcs
   const strip = $("rev-strip");
   for (let i = 0; i < N_REV; i++) {
     const seg = document.createElementNS(SVG, "rect");
-    seg.setAttribute("x", 195 + i * 12.4);
-    seg.setAttribute("y", 8);
+    seg.setAttribute("x", 65 + i * 12.4);
+    seg.setAttribute("y", 195);
     seg.setAttribute("width", 9); seg.setAttribute("height", 8);
     seg.setAttribute("rx", 2);
     seg.setAttribute("class", "rev-seg");
@@ -809,9 +1304,20 @@ function initHalo() {
   }
 }
 
+/* Show/hide the steering section; the cluster slides up to fill the gap. */
+function applyHudSteer() {
+  const on = state.hudSteer;
+  $("hud-steer-btn").classList.toggle("on", on);
+  $("steer-block").style.display = on ? "" : "none";
+  $("cluster-block").setAttribute("transform",
+    on ? "" : "translate(0,-176)");
+  $("halo").setAttribute("viewBox", on ? "0 0 310 400" : "0 0 310 224");
+}
+
 const REV_COLORS = (i) => i < 5 ? "#34d399" : i < 10 ? "#f87171" : "#c4b5fd";
 
-function setHalo(thr, brk, speed, gear, drs, ot, steer, rpm) {
+/* aero: 1 = X-mode (straight), 0 = Z-mode (corner), null = not recorded. */
+function setHalo(thr, brk, speed, gear, aero, boost, steer, rpm) {
   $("thr-arc").setAttribute("d",
     thr <= 0.5 ? "M 0 0" : arcPath(THR.from, THR.from + (THR.to - THR.from) * (thr / 100)));
   $("brk-arc").setAttribute("d",
@@ -819,12 +1325,14 @@ function setHalo(thr, brk, speed, gear, drs, ot, steer, rpm) {
   $("hud-speed").textContent = Math.round(speed);
   $("hud-gear").textContent = gear > 0 ? gear : gear === 0 ? "N" : "R";
 
-  const dp = $("drs-pill"), dt = $("drs-txt");
-  dp.setAttribute("class", drs ? "pill on-drs" : "pill");
-  dt.style.fill = drs ? "#6ee7b7" : "";
-  const op = $("ot-pill"), otx = $("ot-txt");
-  op.setAttribute("class", ot ? "pill on-ot" : "pill");
-  otx.style.fill = ot ? "#d8b4fe" : "";
+  // 2026 systems: overtake mode (boost button) + active aero X/Z
+  const bp = $("boost-pill"), bt = $("boost-txt");
+  bp.setAttribute("class", boost ? "pill on-ot" : "pill");
+  bt.style.fill = boost ? "#d8b4fe" : "";
+  const ap = $("aero-pill"), at = $("aero-txt");
+  ap.setAttribute("class", aero ? "pill on-x" : "pill");
+  at.textContent = aero == null ? "AERO" : aero ? "X-MODE" : "Z-MODE";
+  at.style.fill = aero ? "#6ee7b7" : "";
 
   // steering wheel: ±100% steer -> ±120° rotation
   $("wheel-rot").setAttribute("transform", "rotate(" + (steer * 1.2).toFixed(1) + ")");
@@ -843,9 +1351,10 @@ function setHalo(thr, brk, speed, gear, drs, ot, steer, rpm) {
 
 const charts = [
   { id: "ch-speed", col: "spd", min: 0, max: null, corners: true },
-  { id: "ch-thr", col: "thr", min: 0, max: 100 },
-  { id: "ch-brk", col: "brk", min: 0, max: 100 },
-  { id: "ch-steer", col: "str", min: -100, max: 100, zero: true },
+  { id: "ch-thr", col: "thr", min: 0, max: 100, color: "#34d399" },   // HUD green
+  { id: "ch-brk", col: "brk", min: 0, max: 100, color: "#f87171" },   // HUD red
+  { id: "ch-steer", col: "str", min: -100, max: 100, zero: true,
+    color: "#a78bfa" },                                             // violet
 ];
 const chartCache = {};   // id -> {img, xOf, w, h}
 
@@ -920,7 +1429,7 @@ function buildChart(cfg) {
     ctx.restore(); ctx.globalAlpha = 1;
   }
   if (state.lapB) trace(state.lapB, "#fb923c", 0.5, 1);
-  trace(A, "#22d3ee", 1, 1.5);
+  trace(A, cfg.color || "#22d3ee", 1, 1.5);
 
   chartCache[cfg.id] = { img: ctx.getImageData(0, 0, w, h), d0, d1, w, h };
 }
@@ -1010,19 +1519,40 @@ for (const id of ["ch-speed", "ch-thr", "ch-brk", "ch-steer", "ch-delta"]) {
 
 /* ---------------------------------------------------------------- scene & playback */
 
+/* Floating TELEMETRY card: apply the saved drag position, clamped to the
+   stage; without one it keeps its default bottom-right CSS anchor. */
+function applyHudPos() {
+  const p = state.hudPos;
+  if (!p) return;
+  const hud = $("hud"), stage = $("stage");
+  const maxX = stage.clientWidth - hud.offsetWidth;
+  const maxY = stage.clientHeight - hud.offsetHeight;
+  hud.style.right = "auto"; hud.style.bottom = "auto";
+  hud.style.left = Math.max(0, Math.min(maxX, p.x * stage.clientWidth)) + "px";
+  hud.style.top = Math.max(0, Math.min(maxY, p.y * stage.clientHeight)) + "px";
+}
+
 function rebuildScene() {
   const has = !!state.lapA;
+  applyHudPos();
   $("empty-hint").style.display = has ? "none" : "";
   $("map-toolbar").style.display = has ? "" : "none";
   $("sector-card").style.display = has ? "" : "none";
   $("map-legend").innerHTML = has
     ? `<span class="k kA">${fmtTime(state.lapA.lap_time_ms, 1)} (${state.lapA.car_role})</span>` +
-      (state.lapB ? `<span class="k kB">${fmtTime(state.lapB.lap_time_ms, 1)} (${state.lapB.car_role}) — reference</span>` : "") +
-      (state.lapA.approxMap ? `<span>${state.lapA.track_name} · approx. map (no position data)</span>` : "")
+      (state.lapB ? `<span class="k kB">${fmtTime(state.lapB.lap_time_ms, 1)} (${state.lapB.car_role}) — reference</span>` : "")
     : "";
   if (!has) { mapStatic = null; drawMap(); return; }
   const A = state.lapA;
-  if (!A.corners) A.corners = computeCorners(A);
+  const geom = trackGeom(A.track_id);
+  for (const lap of [A, state.lapB])   // re-place laps if the outline was
+    if (lap && geom && lap.geomVersion !== geom.version)   // recalibrated
+      synthCoords(lap, geom);
+  if (geom) {   // fixed turn numbers, derived from the outline
+    const k = geom.total / (A.track_length || geom.total);
+    A.corners = geom.corners.map((c) => ({
+      n: c.n, startD: c.s0 / k, endD: c.s1 / k, apexD: c.apexS / k }));
+  } else if (!A.corners) A.corners = computeCorners(A);
   if (state.lapB) cornerDeltas();
   if (state.mode === "gap" && !state.lapB) state.mode = "speed";
   fitMap();
@@ -1060,9 +1590,8 @@ function updateToolbar() {
       stops.push(`${ramp(SPEED_RAMP, Math.pow(p, SPEED_GAMMA))} ${p * 100}%`);
     }
     bar.style.background = `linear-gradient(90deg, ${stops.join(",")})`;
-    const r = state.lapA.spdRange || [0, 0];
-    lo.textContent = r[0]; lo.style.color = "";
-    hi.textContent = r[1] + " KM/H"; hi.style.color = "";
+    lo.textContent = "≤" + SPEED_MIN; lo.style.color = "";
+    hi.textContent = SPEED_MAX + " KM/H"; hi.style.color = "";
   }
 }
 
@@ -1187,7 +1716,8 @@ function drawFrame() {
   setHalo(
     interp(s.t, s.thr, t), interp(s.t, s.brk, t),
     interp(s.t, s.spd, t), Math.round(interp(s.t, s.gear, t)),
-    interp(s.t, s.drs, t) > 0.5, interp(s.t, s.ot, t) > 0.5,
+    s.aero ? interp(s.t, s.aero, t) > 0.5 : null,   // pre-capture laps: null
+    interp(s.t, s.ot, t) > 0.5,
     interp(s.t, s.str, t), interp(s.t, s.rpm, t));
   drawChartCursors();
   $("scrub").value = Math.round((t / A.duration) * 1000);
@@ -1264,12 +1794,22 @@ $("sort-seg").addEventListener("click", (e) => {
     x.classList.toggle("on", x === b);
   renderLapList();
 });
+// filter segs have no "ALL" button: clicking the active filter turns it
+// off again (none active = everything shown)
 $("role-seg").addEventListener("click", (e) => {
   const b = e.target.closest("button");
-  if (!b || b.dataset.role === state.roleFilter) return;
-  state.roleFilter = b.dataset.role;
+  if (!b) return;
+  state.roleFilter = b.dataset.role === state.roleFilter ? "all" : b.dataset.role;
   for (const x of document.querySelectorAll("#role-seg button"))
-    x.classList.toggle("on", x === b);
+    x.classList.toggle("on", x.dataset.role === state.roleFilter);
+  renderLapList();
+});
+$("asst-seg").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  state.assistFilter = b.dataset.asst === state.assistFilter ? "all" : b.dataset.asst;
+  for (const x of document.querySelectorAll("#asst-seg button"))
+    x.classList.toggle("on", x.dataset.asst === state.assistFilter);
   renderLapList();
 });
 $("inv-toggle").addEventListener("click", () => {
@@ -1277,12 +1817,121 @@ $("inv-toggle").addEventListener("click", () => {
   $("inv-toggle").classList.toggle("on", state.hideInvalid);
   renderLapList();
 });
+$("fold-btn").addEventListener("click", () => {
+  const ids = new Set(state.laps.map((l) => l.session_id));
+  const allFolded = ids.size > 0 &&
+    [...ids].every((id) => state.folded.has(id));
+  state.folded = allFolded ? new Set() : ids;
+  $("fold-btn").classList.toggle("on", !allFolded);
+  renderLapList();
+});
+$("inv-del").addEventListener("click", async () => {
+  if (!confirm("Delete ALL invalid laps — every track, every session, " +
+               "not just the ones listed here. This cannot be undone. " +
+               "Continue?")) return;
+  await api("/api/laps/invalid", { method: "DELETE" });
+  if (state.lapA && !state.lapA.valid) { state.lapA = null; state.playing = false; }
+  if (state.lapB && !state.lapB.valid) state.lapB = null;
+  await loadTracks(true);
+  rebuildScene();
+});
 window.addEventListener("keydown", (e) => {
-  if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+  if (["SELECT", "INPUT", "BUTTON"].includes(e.target.tagName)) return;
   if (e.code === "Space") { e.preventDefault(); togglePlay(); }
   if (e.code === "ArrowRight") seek(state.t + (e.shiftKey ? 5000 : 1000));
   if (e.code === "ArrowLeft") seek(state.t - (e.shiftKey ? 5000 : 1000));
 });
+/* Collapse the whole lap tray to a thin rail; remembered. */
+{
+  const setSide = (collapsed) => {
+    $("sidebar").classList.toggle("collapsed", collapsed);
+    try { localStorage.setItem("f1lab.side", collapsed ? "1" : "0"); }
+    catch (e) { /* private mode */ }
+    if (state.lapA) rebuildScene();   // stage width changed
+  };
+  $("side-toggle").addEventListener("click", () => setSide(true));
+  $("side-rail").addEventListener("click", () => setSide(false));
+  if (localStorage.getItem("f1lab.side") === "1") setSide(true);
+}
+
+/* Floating telemetry card: drag anywhere on the stage; steering section
+   can be hidden. Both are remembered. */
+{
+  const hud = $("hud"), stage = $("stage");
+  try {
+    state.hudPos = JSON.parse(localStorage.getItem("f1lab.hudPos"));
+    state.hudSteer = localStorage.getItem("f1lab.hudSteer") !== "0";
+  } catch (e) { /* defaults */ }
+  applyHudSteer();
+  applyHudPos();
+  let ox = 0, oy = 0, moving = false;
+  hud.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("#hud-steer-btn")) return;
+    moving = true; hud.classList.add("drag");
+    hud.setPointerCapture(e.pointerId);
+    const r = hud.getBoundingClientRect();
+    ox = e.clientX - r.left; oy = e.clientY - r.top;
+  });
+  hud.addEventListener("pointermove", (e) => {
+    if (!moving) return;
+    const sr = stage.getBoundingClientRect();
+    state.hudPos = { x: (e.clientX - sr.left - ox) / sr.width,
+                     y: (e.clientY - sr.top - oy) / sr.height };
+    applyHudPos();
+  });
+  const drop = () => {
+    if (!moving) return;
+    moving = false; hud.classList.remove("drag");
+    try { localStorage.setItem("f1lab.hudPos", JSON.stringify(state.hudPos)); }
+    catch (e) { /* private mode */ }
+  };
+  hud.addEventListener("pointerup", drop);
+  hud.addEventListener("pointercancel", drop);
+  $("hud-steer-btn").addEventListener("click", () => {
+    state.hudSteer = !state.hudSteer;
+    try { localStorage.setItem("f1lab.hudSteer", state.hudSteer ? "1" : "0"); }
+    catch (e) { /* private mode */ }
+    applyHudSteer();
+    applyHudPos();   // re-clamp: the card just changed height
+  });
+}
+
+/* Splitter: drag to trade stage height for chart height; remembered. */
+{
+  const sp = $("splitter"), chartsEl = $("charts"), mainEl = $("main");
+  // upper bound keeps the stage usable; the floating TELEMETRY card can
+  // be dragged (or its steering section hidden) if space gets tight
+  const maxFrac = () =>
+    Math.max(0.2, Math.min(0.72, 1 - 460 / mainEl.clientHeight));
+  const saved = parseFloat(localStorage.getItem("f1lab.chartsFrac"));
+  if (saved >= 0.12 && saved <= 0.72)
+    chartsEl.style.height = Math.min(saved, maxFrac()) * 100 + "%";
+  let dragging = false, raf = 0;
+  sp.addEventListener("pointerdown", (e) => {
+    dragging = true; sp.classList.add("drag");
+    sp.setPointerCapture(e.pointerId);
+  });
+  sp.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const r = mainEl.getBoundingClientRect();
+    const frac = Math.min(maxFrac(),
+      Math.max(0.12, (r.bottom - e.clientY - 6) / r.height));
+    chartsEl.style.height = frac * 100 + "%";
+    try { localStorage.setItem("f1lab.chartsFrac", frac.toFixed(3)); } catch (err) {}
+    if (!raf) raf = requestAnimationFrame(() => {
+      raf = 0;
+      if (state.lapA) rebuildScene();
+    });
+  });
+  const stop = () => {
+    if (!dragging) return;
+    dragging = false; sp.classList.remove("drag");
+    if (state.lapA) rebuildScene();
+  };
+  sp.addEventListener("pointerup", stop);
+  sp.addEventListener("pointercancel", stop);
+}
+
 window.addEventListener("resize", () => { if (state.lapA) rebuildScene(); });
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && state.lapA) rebuildScene();
@@ -1308,6 +1957,8 @@ window.addEventListener("unhandledrejection", (e) => showToast(String(e.reason))
 /* ---------------------------------------------------------------- boot */
 
 initHalo();
+styleSelect($("track-select"));
+styleSelect($("speed-select"));
 requestAnimationFrame(loop);
 loadTracks(false).catch((e) => showToast("could not load tracks: " + e.message));
 pollStatus();

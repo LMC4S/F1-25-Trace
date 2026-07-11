@@ -33,23 +33,35 @@ if (location.protocol === "file:") {
 
 <div id="layout">
   <aside id="sidebar">
+    <div id="side-rail" title="expand the lap list">
+      <span class="rail-arrow">»</span>
+      <b>LAPS</b>
+    </div>
     <div class="side-head">
       <span>LAPS</span>
       <span class="hint">click = view · REF = compare against</span>
+      <button id="side-toggle" title="collapse the lap list">«</button>
     </div>
     <div id="lap-controls">
       <div class="seg small" id="sort-seg" title="lap ordering">
         <button data-sort="recent" class="on">RECENT</button>
         <button data-sort="fastest">FASTEST</button>
       </div>
-      <div class="seg small" id="role-seg" title="whose laps to show">
-        <button data-role="all" class="on">ALL</button>
+      <div class="seg small" id="role-seg" title="whose laps to show — none active = everyone">
         <button data-role="player">YOU</button>
         <button data-role="ghost">GHOSTS</button>
       </div>
+      <div class="seg small" id="asst-seg" title="filter by driving assists — none active = all laps (laps recorded before assist capture only match when nothing is selected)">
+        <button data-asst="on">ASSISTS</button>
+        <button data-asst="off">NO ASSISTS</button>
+      </div>
       <button id="inv-toggle" class="toggle" title="hide laps the game flagged invalid (corner cuts etc.)">HIDE INV</button>
+      <button id="fold-btn" class="toggle" title="collapse / expand all sessions (click a session header for just that one)">FOLD</button>
     </div>
     <div id="lap-list"></div>
+    <div id="list-foot">
+      <button id="inv-del" title="delete every invalid lap from the database — all tracks, all sessions">✕ delete all invalid laps</button>
+    </div>
   </aside>
 
   <main id="main">
@@ -58,9 +70,12 @@ if (location.protocol === "file:") {
 
       <div id="hud">
         <div class="card-tag">TELEMETRY</div>
-        <svg id="halo" viewBox="0 0 470 196">
-          <!-- steering wheel -->
-          <g transform="translate(72,96)">
+        <span id="hud-drag" title="hold anywhere on this card and drag to move it">✥ DRAG</span>
+        <button id="hud-steer-btn" title="show / hide the steering section">STEER</button>
+        <svg id="halo" viewBox="0 0 310 400">
+          <!-- steering section (hideable) -->
+          <g id="steer-block">
+          <g transform="translate(155,84)">
             <g id="wheel-rot">
               <!-- grips: curved handles standing off the plate -->
               <path class="wheel-grip" d="M -50 -24 Q -62 3 -48 30"/>
@@ -110,9 +125,12 @@ if (location.protocol === "file:") {
               <rect x="-5" y="-33" width="10" height="6" rx="2" class="wheel-marker"/>
             </g>
           </g>
-          <text id="steer-val" x="72" y="170" class="steer-val">0</text>
-          <text x="72" y="186" class="lbl">STEERING</text>
+          <text id="steer-val" x="155" y="158" class="steer-val">0</text>
+          <text x="155" y="174" class="lbl">STEERING</text>
+          </g>
 
+          <!-- the original halo cluster, stacked below the wheel -->
+          <g id="cluster-block">
           <!-- rev lights (built in initHalo) -->
           <g id="rev-strip"></g>
 
@@ -122,22 +140,25 @@ if (location.protocol === "file:") {
           <path id="thr-arc" class="arc thr" d=""/>
           <path id="brk-bg"  class="arc-bg" d=""/>
           <path id="brk-arc" class="arc brk" d=""/>
-          <text x="206" y="192" class="lbl">THROTTLE</text>
-          <text x="364" y="192" class="lbl">BRAKE</text>
+          <text x="76" y="387" class="lbl">THROTTLE</text>
+          <text x="234" y="387" class="lbl">BRAKE</text>
 
           <!-- speed cluster: gear on top, big speed centred -->
-          <rect x="266" y="34" width="38" height="27" rx="6" class="gear-badge"/>
-          <text id="hud-gear" x="285" y="54" class="gear">N</text>
+          <rect x="136" y="229" width="38" height="27" rx="6" class="gear-badge"/>
+          <text id="hud-gear" x="155" y="249" class="gear">N</text>
           <!-- slant comes from skewX, not the italic font face: geometric
                transforms are rasterized outline-level, so the last digit's
                overhang can never be clipped to a glyph box -->
           <text id="hud-speed" x="0" y="0" class="speed"
-                transform="translate(285,126) skewX(-10)">0</text>
-          <text x="285" y="146" class="unit">KM/H</text>
-          <rect id="drs-pill" x="222" y="164" rx="8" width="56" height="17" class="pill"/>
-          <text id="drs-txt" x="250" y="176" class="pill-txt">DRS</text>
-          <rect id="ot-pill" x="292" y="164" rx="8" width="56" height="17" class="pill"/>
-          <text id="ot-txt" x="320" y="176" class="pill-txt">OT</text>
+                transform="translate(155,321) skewX(-10)">0</text>
+          <text x="155" y="341" class="unit">KM/H</text>
+
+          <!-- 2026: overtake/boost + active aero X (straight) / Z (corner) -->
+          <rect id="boost-pill" x="88" y="359" rx="8" width="62" height="17" class="pill"/>
+          <text id="boost-txt" x="119" y="371" class="pill-txt">BOOST</text>
+          <rect id="aero-pill" x="160" y="359" rx="8" width="62" height="17" class="pill"/>
+          <text id="aero-txt" x="191" y="371" class="pill-txt">AERO</text>
+          </g>
         </svg>
         <div id="hud-delta" class="hud-delta"></div>
       </div>
@@ -189,8 +210,9 @@ if (location.protocol === "file:") {
       <div id="time-display">0:00.000</div>
     </div>
 
+    <div id="splitter" title="drag to resize the charts"></div>
     <div id="charts">
-      <div class="chart-row"><label>SPEED</label><canvas id="ch-speed" class="chart"></canvas></div>
+      <div class="chart-row tall"><label>SPEED</label><canvas id="ch-speed" class="chart"></canvas></div>
       <div class="chart-row"><label>THROTTLE</label><canvas id="ch-thr" class="chart"></canvas></div>
       <div class="chart-row"><label>BRAKE</label><canvas id="ch-brk" class="chart"></canvas></div>
       <div class="chart-row"><label>STEER</label><canvas id="ch-steer" class="chart"></canvas></div>

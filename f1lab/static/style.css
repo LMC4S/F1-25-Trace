@@ -50,10 +50,46 @@ header {
 .chip.warn { background: #3a2410; color: var(--yellow); }
 @keyframes blink { 50% { opacity: .3; } }
 #status-detail { color: var(--dim); font-size: 12px; }
-select {
+/* ---------- themed dropdowns (native select stays hidden inside) ---------- */
+.dd { position: relative; display: inline-block; }
+.dd select { display: none; }
+.dd-btn {
+  display: flex; align-items: center; gap: 10px; max-width: 360px;
   background: var(--panel2); color: var(--text);
-  border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
-  font-size: 13px; max-width: 340px;
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 11px;
+  font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.dd-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-btn:hover { border-color: var(--accent); }
+.dd-arr {
+  color: var(--f1red); font-style: normal; font-size: 9px;
+  transition: transform .15s;
+}
+.dd.open .dd-arr { transform: rotate(180deg); }
+.dd-menu {
+  display: none; position: absolute; top: calc(100% + 6px); right: 0;
+  min-width: 100%; z-index: 60; padding: 5px;
+  background:
+    repeating-linear-gradient(45deg, rgba(255,255,255,.022) 0 2px, transparent 2px 5px),
+    linear-gradient(168deg, rgba(40,48,64,.97), rgba(10,12,17,.99) 58%);
+  border: 1px solid #2c3444;
+  border-radius: 3px 12px 3px 12px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 14px 34px rgba(0,0,0,.6);
+  white-space: nowrap;
+}
+.dd-menu::before {
+  content: ""; position: absolute; left: 0; top: 0; height: 2px; width: 62%;
+  background: linear-gradient(90deg, var(--f1red), rgba(225,6,0,0));
+}
+.dd.open .dd-menu { display: block; }
+.dd-item {
+  padding: 6px 12px; font-size: 12px; color: var(--text);
+  border-radius: 4px; cursor: pointer;
+}
+.dd-item:hover { background: #1b2330; color: var(--accent); }
+.dd-item.sel {
+  color: var(--accent); font-weight: 700;
+  border-left: 3px solid var(--f1red); border-radius: 0 4px 4px 0;
 }
 
 /* ---------- layout ---------- */
@@ -64,10 +100,33 @@ select {
 }
 .side-head {
   display: flex; justify-content: space-between; align-items: baseline;
+  gap: 8px;
   padding: 10px 12px 6px; font-size: 11px; font-weight: 700;
   letter-spacing: 1px; color: var(--dim);
 }
-.hint { font-weight: 400; letter-spacing: 0; font-size: 10px; }
+.hint { font-weight: 400; letter-spacing: 0; font-size: 10px; flex: 1; }
+#side-toggle {
+  background: #14202b; border: 1px solid #2c4a56; color: var(--accent);
+  font-family: inherit; font-size: 13px; font-weight: 700;
+  border-radius: 5px; padding: 1px 10px; cursor: pointer; line-height: 1.4;
+}
+#side-toggle:hover { border-color: var(--accent); background: #123a44; }
+#side-rail {
+  display: none; cursor: pointer; align-items: center;
+  flex-direction: column; gap: 10px; padding-top: 10px; height: 100%;
+}
+#side-rail .rail-arrow {
+  font-size: 13px; font-weight: 700; color: var(--dim);
+  border: 1px solid var(--line); border-radius: 5px; padding: 0 6px 2px;
+}
+#side-rail b {
+  writing-mode: vertical-rl; font-size: 10px; font-weight: 700;
+  font-style: italic; letter-spacing: 2px; color: var(--dim);
+}
+#side-rail:hover .rail-arrow, #side-rail:hover b { color: var(--accent); }
+#sidebar.collapsed { width: 32px; }
+#sidebar.collapsed > :not(#side-rail) { display: none; }
+#sidebar.collapsed #side-rail { display: flex; }
 #lap-controls {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   padding: 0 10px 8px; border-bottom: 1px solid var(--line);
@@ -81,6 +140,15 @@ select {
 .toggle:hover { border-color: var(--dim); }
 .toggle.on { background: #123a44; border-color: var(--accent); color: var(--accent); }
 #lap-list { overflow-y: auto; flex: 1; }
+#list-foot {
+  flex: none; border-top: 1px solid var(--line); padding: 5px 12px;
+  text-align: right;
+}
+#list-foot button {
+  background: none; border: none; color: #58627a; cursor: pointer;
+  font-family: inherit; font-size: 10px; letter-spacing: .4px;
+}
+#list-foot button:hover { color: #f87171; }
 .lap-row .rank {
   flex: none; width: 16px; text-align: right; font-size: 10px;
   font-weight: 800; font-style: italic; color: var(--dim);
@@ -96,7 +164,10 @@ select {
   padding: 6px 12px 4px; font-size: 10px; font-weight: 700;
   letter-spacing: .8px; color: var(--dim); text-transform: uppercase;
   background: var(--panel); border-bottom: 1px solid var(--line);
+  cursor: pointer; user-select: none;
 }
+.sess-head:hover { color: var(--text); }
+.sess-head .tri { margin-right: 5px; color: #4d5a70; }
 .lap-row {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 10px; cursor: pointer; border-bottom: 1px solid #161b26;
@@ -201,6 +272,23 @@ select {
 }
 #zoom-chip button:hover { border-color: var(--accent); color: var(--accent); }
 
+/* ---------- broadcast cards (telemetry / timing / setup) ----------
+   Shared look: carbon weave over a steep dark gradient, asymmetric
+   corners, a red racing stripe fading out along the top edge. */
+#hud, #sector-card, #setup-card {
+  background:
+    repeating-linear-gradient(45deg, rgba(255,255,255,.022) 0 2px, transparent 2px 5px),
+    linear-gradient(168deg, rgba(40,48,64,.88), rgba(10,12,17,.95) 58%);
+  border: 1px solid #2c3444;
+  border-radius: 3px 14px 3px 14px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 10px 32px rgba(0,0,0,.55);
+}
+#hud::before, #sector-card::before, #setup-card::before {
+  content: ""; position: absolute; left: 0; top: 0; height: 2px; width: 62%;
+  background: linear-gradient(90deg, var(--f1red), rgba(225,6,0,0));
+  border-radius: 3px 0 0 0;
+}
+
 /* ---------- broadcast card tags ---------- */
 .card-tag {
   position: absolute; top: -8px; left: 12px;
@@ -213,11 +301,9 @@ select {
 /* ---------- sector card ---------- */
 #sector-card {
   position: absolute; right: 14px; top: 10px;
-  background: var(--card); border: 1px solid var(--line);
-  border-radius: 10px; padding: 8px 12px;
+  padding: 8px 12px;
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   font-size: 12px; font-variant-numeric: tabular-nums;
-  box-shadow: 0 8px 24px rgba(0,0,0,.45);
 }
 #sector-card table { border-collapse: collapse; }
 #sector-card th {
@@ -243,10 +329,8 @@ select {
   position: absolute; left: 14px; top: 34px; z-index: 6;
   /* no inner scroll and no backdrop-filter: Chromium paints a composited
      scrollable overlay above the canvas with a white backing store */
-  background: #111318f2; border: 1px solid var(--line);
-  border-radius: 10px; padding: 10px 12px 8px;
+  padding: 10px 12px 8px;
   font-size: 11px; font-variant-numeric: tabular-nums;
-  box-shadow: 0 8px 24px rgba(0,0,0,.45);
 }
 #setup-card table { border-collapse: collapse; }
 #setup-card th {
@@ -267,23 +351,41 @@ select {
   max-width: 150px; white-space: normal; font-size: 10px; line-height: 1.5;
 }
 
-/* ---------- halo hud ---------- */
+/* ---------- halo hud (floating card, wheel above the dial) ---------- */
 #hud {
-  position: absolute; right: 14px; bottom: 12px; width: 370px;
-  pointer-events: none;
-  background: var(--card);
-  border: 1px solid #232a38;
-  border-radius: 14px;
+  position: absolute; right: 14px; bottom: 12px; width: 255px;
+  cursor: grab;
   padding: 12px 14px 8px;
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  touch-action: none; user-select: none;
 }
+#hud.drag { cursor: grabbing; }
+#hud-drag {
+  position: absolute; top: -8px; right: 64px; z-index: 1;
+  background: var(--card); border: 1px solid var(--line); color: var(--dim);
+  font-size: 8px; font-weight: 700; font-style: italic;
+  letter-spacing: 1.5px; padding: 2px 9px; border-radius: 3px;
+  transform: skewX(-12deg); cursor: grab;
+}
+#hud:hover #hud-drag, #hud.drag #hud-drag {
+  border-color: var(--accent); color: var(--accent);
+}
+#hud.drag #hud-drag { cursor: grabbing; }
+#hud-steer-btn {
+  position: absolute; top: -8px; right: 12px; z-index: 1;
+  background: var(--card); border: 1px solid var(--line); color: var(--dim);
+  font-family: inherit; font-size: 8px; font-weight: 700; font-style: italic;
+  letter-spacing: 1.5px; padding: 2px 9px; border-radius: 3px;
+  transform: skewX(-12deg); cursor: pointer;
+}
+#hud-steer-btn.on { border-color: var(--accent); color: var(--accent); }
 #halo { width: 100%; display: block; }
 .arc-bg { fill: none; stroke: #222a39; stroke-width: 11; stroke-linecap: round; }
 .arc { fill: none; stroke-width: 11; stroke-linecap: round; }
 .arc.thr { stroke: var(--green); filter: drop-shadow(0 0 4px rgba(52,211,153,.5)); }
 .arc.brk { stroke: var(--red); filter: drop-shadow(0 0 4px rgba(248,113,113,.5)); }
 .arc-tick { stroke: #2e3748; stroke-width: 2; }
+.pill.on-x { fill: #064e3b; stroke: #10b981; }
 .speed {
   /* upright face + skewX on the element (see index.html): font-level italic
      ink overhangs its tabular advance box and some rasterizers clip it,
@@ -297,7 +399,6 @@ select {
 .gear { fill: var(--yellow); font-size: 19px; font-weight: 800; text-anchor: middle; }
 .lbl { fill: #5b6576; font-size: 9px; text-anchor: middle; letter-spacing: 2px; font-weight: 700; }
 .pill { fill: #171d29; stroke: #2a3242; }
-.pill.on-drs { fill: #064e3b; stroke: #10b981; }
 .pill.on-ot { fill: #3b0764; stroke: #a855f7; }
 .pill-txt { fill: #5b6576; font-size: 10px; font-weight: 800; text-anchor: middle; letter-spacing: 1px; }
 .wheel-grip {
@@ -349,18 +450,32 @@ select {
 }
 
 /* ---------- charts ---------- */
-#charts {
-  flex: none; padding: 6px 14px 10px; background: var(--panel);
-  border-top: 1px solid var(--line);
+#splitter {
+  flex: none; height: 8px; cursor: row-resize; position: relative;
+  background: var(--panel); border-top: 1px solid var(--line);
+  touch-action: none;
 }
-.chart-row { display: flex; align-items: stretch; gap: 8px; margin-top: 4px; }
+#splitter::after {
+  content: ""; position: absolute; left: 50%; top: 3px;
+  width: 46px; height: 3px; transform: translateX(-50%);
+  border-radius: 2px; background: #2a3242;
+}
+#splitter:hover::after, #splitter.drag::after { background: var(--accent); }
+#charts {
+  flex: none; height: 40%; min-height: 130px;
+  display: flex; flex-direction: column;
+  padding: 2px 14px 10px; background: var(--panel);
+}
+.chart-row {
+  flex: 1; min-height: 0;
+  display: flex; align-items: stretch; gap: 8px; margin-top: 4px;
+}
+.chart-row.tall { flex: 1.5; }
 .chart-row label {
   width: 64px; flex: none; font-size: 9px; font-weight: 700;
   letter-spacing: 1px; color: var(--dim); padding-top: 4px; text-align: right;
 }
-canvas.chart { flex: 1; height: 58px; min-width: 0; cursor: crosshair; }
-#ch-speed { height: 88px; }
-#ch-delta { height: 66px; }
+canvas.chart { flex: 1; min-width: 0; min-height: 0; cursor: crosshair; }
 
 /* ---------- empty ---------- */
 #empty-hint {
