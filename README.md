@@ -43,6 +43,10 @@ In Time Trial, load any leaderboard entry (e.g. the world record) as your
 speed, throttle, brake, steering — so the recorder captures its complete lap
 as a `RIVAL` lap you can compare against. No exports or downloads needed.
 
+**Keep the ghost car enabled** — a disabled shadow car is not broadcast at
+all. While driving, the header shows `RIVAL GHOST ✓` when ghost telemetry is
+actually coming in, so you know before wasting a session.
+
 ## Track maps
 
 Laps recorded from the game are drawn from the car's **real world
@@ -55,11 +59,17 @@ outlines** for every 2026-calendar track including Madrid
 
 ## Viewer
 
+- Pick a **track** in the header dropdown: every lap you ever recorded on it,
+  from all sessions, in one list (grouped by session).
 - Click a lap to replay it: dot on the track map + instrument cluster
   (speed, gear, throttle/brake arcs, rev lights, steering wheel, DRS/OT).
-- Star (★) a second lap as **reference**: ghost dot, overlaid speed / pedal /
-  steering traces, and a **DELTA** graph vs distance — green where you gain
-  time on the reference, red where you lose it.
+- Mark any other lap as **REF** — from any session, any day: ghost dot,
+  overlaid speed / throttle / brake / steering traces, and a **DELTA** graph
+  vs distance — green where you gain time on the reference, red where you
+  lose it.
+- **Scroll on the map to zoom into a corner** (drag to pan, double-click or
+  RESET to fit): every chart re-scales to that stretch of track so you can
+  study braking points in detail.
 - Space = play/pause, ←/→ = seek 1 s (Shift = 5 s), click charts or map to seek.
 
 ## Testing without the game

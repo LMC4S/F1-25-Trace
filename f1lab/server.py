@@ -65,6 +65,11 @@ def make_handler(db_path, recorder):
                                       else {"listening": False})
                 if path == "/api/sessions":
                     return self.sessions()
+                if path == "/api/tracks":
+                    return self.tracks()
+                m = re.fullmatch(r"/api/tracks/(-?\d+)/laps", path)
+                if m:
+                    return self.track_laps(int(m.group(1)))
                 m = re.fullmatch(r"/api/sessions/(\d+)/laps", path)
                 if m:
                     return self.session_laps(int(m.group(1)))
@@ -104,6 +109,28 @@ def make_handler(db_path, recorder):
                 " GROUP BY s.id HAVING n_laps > 0 OR s.id IN"
                 "  (SELECT MAX(id) FROM sessions)"
                 " ORDER BY s.id DESC").fetchall()
+            self._json([dict(r) for r in rows])
+
+        def tracks(self):
+            rows = get_con().execute(
+                "SELECT s.track_id, s.track_name, COUNT(l.id) AS n_laps,"
+                " MIN(CASE WHEN l.car_role='player' AND l.valid=1"
+                "     THEN l.lap_time_ms END) AS best_ms,"
+                " MAX(s.started_at) AS last_at"
+                " FROM sessions s JOIN laps l ON l.session_id = s.id"
+                " GROUP BY s.track_id ORDER BY last_at DESC").fetchall()
+            self._json([dict(r) for r in rows])
+
+        def track_laps(self, track_id):
+            rows = get_con().execute(
+                "SELECT l.id, l.car_role, l.car_index, l.lap_num,"
+                " l.lap_time_ms, l.s1_ms, l.s2_ms, l.s3_ms, l.valid,"
+                " l.tyre_visual, l.top_speed, l.n_samples, l.created_at,"
+                " l.session_id, s.started_at, s.session_type_name,"
+                " s.packet_format"
+                " FROM laps l JOIN sessions s ON s.id = l.session_id"
+                " WHERE s.track_id=?"
+                " ORDER BY s.id DESC, l.id", (track_id,)).fetchall()
             self._json([dict(r) for r in rows])
 
         def session_laps(self, sid):

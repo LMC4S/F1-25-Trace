@@ -4,9 +4,9 @@
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  sessions: [],
-  sessionId: null,
-  laps: [],
+  tracks: [],
+  trackId: null,
+  laps: [],          // all laps of the selected track, across sessions
   lapA: null,        // viewed lap (loaded, with samples + lookups)
   lapB: null,        // reference lap
   t: 0,              // playhead ms (lap A clock)
@@ -14,6 +14,8 @@ const state = {
   speed: 1,
   lastFrame: 0,
   mode: "speed",     // racing-line color mode: speed | gap
+  mapZoom: null,     // {k, wx, wz}: zoom factor + world-space view centre
+  viewD: null,       // [d0, d1] focused distance range (map zoom -> charts)
 };
 
 /* ---------------------------------------------------------------- color */
@@ -208,42 +210,63 @@ async function pollStatus() {
       detail += " · lap " + st.live.lap_num + " · " + fmtTime(st.live.lap_time_ms, 1);
     $("status-detail").textContent = detail;
 
+    // ghost telemetry indicator: is a rival/PB ghost broadcasting right now?
+    const gc = $("ghost-chip");
+    if (st.pps > 0 && st.ghosts) {
+      gc.style.display = "";
+      const g = st.ghosts;
+      if (g.rival && g.rival_data) {
+        gc.className = "chip live"; gc.textContent = "RIVAL GHOST ✓";
+      } else if (g.rival) {
+        gc.className = "chip warn"; gc.textContent = "RIVAL: NO TELEMETRY";
+      } else if (g.pb && g.pb_data) {
+        gc.className = "chip live"; gc.textContent = "PB GHOST ✓";
+      } else {
+        gc.className = "chip warn"; gc.textContent = "NO GHOST DATA";
+      }
+    } else gc.style.display = "none";
+
     const stamp = JSON.stringify(st.last_lap);
     if (stamp !== lastLapStamp) {
       lastLapStamp = stamp;
-      await loadSessions(true);   // new lap stored -> refresh lists
+      await loadTracks(true);   // new lap stored -> refresh lists
     }
   } catch (e) { /* server briefly away; retry next tick */ }
   setTimeout(pollStatus, 2000);
 }
 
-/* ---------------------------------------------------------------- sessions & laps */
+/* ---------------------------------------------------------------- tracks & laps */
 
-async function loadSessions(keepSelection) {
-  state.sessions = await api("/api/sessions");
-  const sel = $("session-select");
-  const prev = state.sessionId;
+async function loadTracks(keepSelection) {
+  state.tracks = await api("/api/tracks");
+  const sel = $("track-select");
+  const prev = state.trackId;
   sel.innerHTML = "";
-  for (const s of state.sessions) {
+  for (const t of state.tracks) {
     const o = document.createElement("option");
-    o.value = s.id;
-    o.textContent = `#${s.id} ${s.track_name} — ${s.session_type_name}` +
-      (s.best_ms ? ` (best ${fmtTime(s.best_ms, 1)})` : "") +
-      ` · ${(s.started_at || "").replace("T", " ")}`;
+    o.value = t.track_id;
+    o.textContent = `${t.track_name} — ${t.n_laps} lap${t.n_laps === 1 ? "" : "s"}` +
+      (t.best_ms ? ` · best ${fmtTime(t.best_ms, 1)}` : "");
     sel.appendChild(o);
   }
-  if (!state.sessions.length) { $("lap-list").innerHTML =
-    '<div class="empty-list">No sessions recorded yet.</div>'; return; }
-  const want = keepSelection && prev &&
-    state.sessions.some((s) => s.id === prev) ? prev : state.sessions[0].id;
+  if (!state.tracks.length) { $("lap-list").innerHTML =
+    '<div class="empty-list">No laps recorded yet.</div>'; return; }
+  const want = keepSelection && prev != null &&
+    state.tracks.some((t) => t.track_id === prev) ? prev : state.tracks[0].track_id;
   sel.value = want;
-  if (want !== prev || keepSelection) await selectSession(want);
+  await selectTrack(want);
 }
 
-async function selectSession(id) {
-  state.sessionId = id;
-  state.laps = await api(`/api/sessions/${id}/laps`);
+async function selectTrack(id) {
+  state.trackId = id;
+  state.laps = await api(`/api/tracks/${id}/laps`);
   renderLapList();
+}
+
+function fmtSession(lap) {
+  // "2026-07-11T15:19:09" -> "07-11 15:19"
+  const at = (lap.started_at || "").slice(5, 16).replace("T", " ");
+  return `${at} · ${lap.session_type_name || "?"} · session #${lap.session_id}`;
 }
 
 function roleBadge(role) {
@@ -255,25 +278,39 @@ function renderLapList() {
   const box = $("lap-list");
   box.innerHTML = "";
   if (!state.laps.length) {
-    box.innerHTML = '<div class="empty-list">No complete laps in this session yet — finish a full lap and it appears here automatically.</div>';
+    box.innerHTML = '<div class="empty-list">No complete laps on this track yet — finish a full lap and it appears here automatically.</div>';
     return;
   }
+  let lastSession = null;
+  const bestId = state.laps.reduce((b, l) =>
+    l.car_role === "player" && l.valid &&
+    (!b || l.lap_time_ms < b.lap_time_ms) ? l : b, null)?.id;
   for (const lap of state.laps) {
+    if (lap.session_id !== lastSession) {
+      lastSession = lap.session_id;
+      const head = document.createElement("div");
+      head.className = "sess-head";
+      head.textContent = fmtSession(lap);
+      box.appendChild(head);
+    }
     const row = document.createElement("div");
     row.className = "lap-row";
     if (state.lapA && lap.id === state.lapA.id) row.classList.add("sel");
     if (state.lapB && lap.id === state.lapB.id) row.classList.add("ref-sel");
+    const isRef = state.lapB && lap.id === state.lapB.id;
     row.innerHTML = `
       ${roleBadge(lap.car_role)}
       <div class="lap-main">
         <div class="lap-time">${fmtTime(lap.lap_time_ms, 1)}
+          ${lap.id === bestId ? '<span class="pb">BEST</span>' : ""}
           ${lap.valid ? "" : '<span class="inv">INV</span>'}</div>
         <div class="lap-sub">L${lap.lap_num} · ${fmtTime(lap.s1_ms)} | ${fmtTime(lap.s2_ms)} | ${fmtTime(lap.s3_ms)} · ${lap.top_speed} km/h</div>
       </div>
-      <button class="star ${state.lapB && lap.id === state.lapB.id ? "on" : ""}" title="set as reference">★</button>
+      <button class="refbtn ${isRef ? "on" : ""}"
+        title="${isRef ? "stop comparing against this lap" : "compare the viewed lap against this one"}">REF</button>
       <button class="del" title="delete lap">✕</button>`;
     row.addEventListener("click", () => viewLap(lap.id));
-    row.querySelector(".star").addEventListener("click", (e) => {
+    row.querySelector(".refbtn").addEventListener("click", (e) => {
       e.stopPropagation(); toggleRef(lap.id);
     });
     row.querySelector(".del").addEventListener("click", async (e) => {
@@ -282,7 +319,7 @@ function renderLapList() {
       await api(`/api/laps/${lap.id}`, { method: "DELETE" });
       if (state.lapA && state.lapA.id === lap.id) state.lapA = null;
       if (state.lapB && state.lapB.id === lap.id) state.lapB = null;
-      await selectSession(state.sessionId);
+      await loadTracks(true);
       rebuildScene();
     });
     box.appendChild(row);
@@ -331,14 +368,31 @@ function fitMap() {
   const w = map.width - 2 * pad - hudReserve, h = map.height - padT - padB;
   const scale = Math.min(w / (maxX - minX || 1), h / (maxZ - minZ || 1));
   view = {
-    scale, dpr,
+    scale, dpr, baseScale: scale,
     ox: pad + (w - (maxX - minX) * scale) / 2 - minX * scale,
     // z axis flipped so "north" is up
     oy: padT + (h - (maxZ - minZ) * scale) / 2 + maxZ * scale,
   };
+  // reapply a saved zoom (world-space, so it survives lap/ref switches)
+  if (state.mapZoom) {
+    const { k, wx, wz } = state.mapZoom;
+    view.scale = view.baseScale * k;
+    view.ox = map.width / 2 - wx * view.scale;
+    view.oy = map.height / 2 + wz * view.scale;
+  }
 }
 const W2X = (x) => view.ox + x * view.scale;
 const W2Y = (z) => view.oy - z * view.scale;
+const X2W = (px) => (px - view.ox) / view.scale;
+const Y2W = (py) => (view.oy - py) / view.scale;
+
+/* Remember the current zoom as factor + world centre; null when fitted. */
+function saveZoom() {
+  const k = view.scale / view.baseScale;
+  state.mapZoom = k <= 1.02 ? null
+    : { k, wx: X2W(map.width / 2), wz: Y2W(map.height / 2) };
+  if (!state.mapZoom) fitMap();
+}
 
 /* The static map layer (ribbon, racing line, markers, badges) is expensive,
    so it renders once into an offscreen canvas; per-frame we blit + draw dots. */
@@ -530,10 +584,7 @@ function drawMap() {
   mctx.fill(); mctx.shadowBlur = 0; mctx.stroke();
 }
 
-map.addEventListener("click", (e) => {
-  if (!view || !state.lapA) return;
-  const r = map.getBoundingClientRect();
-  const px = (e.clientX - r.left) * view.dpr, py = (e.clientY - r.top) * view.dpr;
+function mapSeek(px, py) {
   const s = state.lapA.samples;
   let best = -1, bestDist = 1e18;
   const step = Math.max(1, Math.floor(s.x.length / 2000));
@@ -543,7 +594,125 @@ map.addEventListener("click", (e) => {
     if (d2 < bestDist) { bestDist = d2; best = i; }
   }
   if (best >= 0 && bestDist < (40 * view.dpr) ** 2) seek(s.t[best]);
-});
+}
+
+/* ------------------------------------------------- map zoom & pan
+   Wheel = zoom at cursor. Drag = pan (when zoomed). Plain click = seek.
+   Double-click / RESET = back to full track. While zoomed, the charts
+   focus on the visible stretch of track (state.viewD). */
+
+let zoomRaf = 0, zoomSettle = 0;
+
+function afterZoomGesture() {
+  saveZoom();
+  if (!zoomRaf) zoomRaf = requestAnimationFrame(() => {
+    zoomRaf = 0;
+    renderMapStatic();
+    drawMap();
+  });
+  clearTimeout(zoomSettle);   // charts rebuild once the gesture settles
+  zoomSettle = setTimeout(() => { updateViewD(); }, 140);
+}
+
+/* Focused distance range = longest contiguous visible run of lap A. */
+function computeViewD() {
+  if (!view || !state.lapA || !state.mapZoom) return null;
+  const s = state.lapA.samples, w = map.width, h = map.height;
+  let bestD0 = 0, bestD1 = 0, runStart = -1;
+  const flush = (endI) => {
+    if (runStart < 0) return;
+    const d0 = s.d[runStart], d1 = s.d[endI];
+    if (d1 - d0 > bestD1 - bestD0) { bestD0 = d0; bestD1 = d1; }
+    runStart = -1;
+  };
+  for (let i = 0; i < s.x.length; i++) {
+    const px = W2X(s.x[i]), py = W2Y(s.z[i]);
+    const vis = px >= 0 && px <= w && py >= 0 && py <= h;
+    if (vis && runStart < 0) runStart = i;
+    if (!vis) flush(i - 1);
+  }
+  flush(s.x.length - 1);
+  if (bestD1 - bestD0 < 30) return null;              // degenerate
+  if (bestD1 - bestD0 > state.lapA.maxD * 0.96) return null;  // ~whole lap
+  return [bestD0, bestD1];
+}
+
+function updateViewD() {
+  state.viewD = computeViewD();
+  for (const cfg of charts) buildChart(cfg);
+  buildDeltaChart();
+  updateZoomChip();
+  drawFrame();
+}
+
+function updateZoomChip() {
+  const chip = $("zoom-chip");
+  if (!state.mapZoom) { chip.style.display = "none"; return; }
+  chip.style.display = "";
+  let txt = "×" + state.mapZoom.k.toFixed(1);
+  if (state.viewD) {
+    const [d0, d1] = state.viewD;
+    const cs = (state.lapA.corners || [])
+      .filter((c) => c.apexD >= d0 && c.apexD <= d1).map((c) => c.n);
+    txt += cs.length ? ` · T${cs[0]}${cs.length > 1 ? "–T" + cs[cs.length - 1] : ""}`
+                     : ` · ${Math.round(d0)}–${Math.round(d1)} m`;
+  }
+  $("zoom-txt").textContent = txt;
+}
+
+function resetZoom() {
+  if (!state.mapZoom) return;
+  state.mapZoom = null;
+  fitMap();
+  renderMapStatic();
+  updateViewD();
+}
+$("zoom-reset").addEventListener("click", resetZoom);
+map.addEventListener("dblclick", resetZoom);
+
+map.addEventListener("wheel", (e) => {
+  if (!view || !state.lapA) return;
+  e.preventDefault();
+  const r = map.getBoundingClientRect();
+  const px = (e.clientX - r.left) * view.dpr, py = (e.clientY - r.top) * view.dpr;
+  const f = Math.exp(-e.deltaY * 0.0015);
+  const k = Math.min(40, Math.max(1, (view.scale / view.baseScale) * f));
+  const scale = view.baseScale * k;
+  // keep the world point under the cursor fixed
+  view.ox = px - X2W(px) * scale;
+  view.oy = py + Y2W(py) * scale;
+  view.scale = scale;
+  afterZoomGesture();
+}, { passive: false });
+
+{
+  let downX = 0, downY = 0, panning = false, dragged = false;
+  map.addEventListener("pointerdown", (e) => {
+    if (!view || !state.lapA) return;
+    downX = e.clientX; downY = e.clientY;
+    panning = true; dragged = false;
+    map.setPointerCapture(e.pointerId);
+  });
+  map.addEventListener("pointermove", (e) => {
+    if (!panning) return;
+    const dx = e.clientX - downX, dy = e.clientY - downY;
+    if (!dragged && Math.hypot(dx, dy) < 4) return;
+    dragged = true;
+    if (!state.mapZoom) return;   // fitted: nothing to pan
+    view.ox += dx * view.dpr; view.oy += dy * view.dpr;
+    downX = e.clientX; downY = e.clientY;
+    afterZoomGesture();
+  });
+  map.addEventListener("pointerup", (e) => {
+    if (!panning) return;
+    panning = false;
+    if (!dragged) {   // plain click -> seek to nearest point on the line
+      const r = map.getBoundingClientRect();
+      mapSeek((e.clientX - r.left) * view.dpr, (e.clientY - r.top) * view.dpr);
+    }
+  });
+  map.addEventListener("pointercancel", () => { panning = false; });
+}
 
 /* ---------------------------------------------------------------- halo hud */
 
@@ -629,8 +798,9 @@ function setHalo(thr, brk, speed, gear, drs, ot, steer, rpm) {
 /* ---------------------------------------------------------------- charts */
 
 const charts = [
-  { id: "ch-speed", col: "spd", min: 0, max: null },
-  { id: "ch-pedals", cols: ["thr", "brk"], min: 0, max: 100 },
+  { id: "ch-speed", col: "spd", min: 0, max: null, corners: true },
+  { id: "ch-thr", col: "thr", min: 0, max: 100 },
+  { id: "ch-brk", col: "brk", min: 0, max: 100 },
   { id: "ch-steer", col: "str", min: -100, max: 100, zero: true },
 ];
 const chartCache = {};   // id -> {img, xOf, w, h}
@@ -665,7 +835,10 @@ function buildChart(cfg) {
     max = Math.ceil(max / 50) * 50;
   }
   const w = cv.width, h = cv.height, padT = 3 * dpr, padB = 3 * dpr;
-  const X = (d) => (d / maxD) * w;
+  // x domain: full lap, or the track section the map is zoomed into
+  const d0 = state.viewD ? state.viewD[0] : 0;
+  const d1 = state.viewD ? state.viewD[1] : maxD;
+  const X = (d) => ((d - d0) / (d1 - d0)) * w;
   const Y = (v) => padT + (1 - (v - min) / (max - min)) * (h - padT - padB);
 
   ctx.clearRect(0, 0, w, h);
@@ -681,30 +854,31 @@ function buildChart(cfg) {
     ctx.beginPath(); ctx.moveTo(0, Y(0)); ctx.lineTo(w, Y(0)); ctx.stroke();
   }
   // corner numbers along the top of the speed chart
-  if (cfg.id === "ch-speed" && A.corners) {
-    ctx.fillStyle = "#44506455"; ctx.fillStyle = "#445064";
+  if (cfg.corners && A.corners) {
+    ctx.fillStyle = "#445064";
     ctx.font = 8 * dpr + "px sans-serif"; ctx.textAlign = "center";
-    for (const c of A.corners) ctx.fillText(c.n, X(c.apexD), 9 * dpr);
+    for (const c of A.corners)
+      if (c.apexD >= d0 && c.apexD <= d1) ctx.fillText(c.n, X(c.apexD), 9 * dpr);
     ctx.textAlign = "left";
   }
 
-  const colColors = { thr: "#34d399", brk: "#f87171" };
-  function trace(lap, col, color, alpha, width) {
-    const s = lap.samples;
+  function trace(lap, color, alpha, width) {
+    const s = lap.samples, col = s[cfg.col];
+    const i0 = Math.max(0, lowerIdx(s.d, d0) - 1);
+    const i1 = Math.min(s.d.length - 1, lowerIdx(s.d, d1) + 2);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip();
     ctx.beginPath();
-    ctx.moveTo(X(s.d[0]), Y(s[col][0]));
-    for (let i = 1; i < s.d.length; i++) ctx.lineTo(X(s.d[i]), Y(s[col][i]));
+    ctx.moveTo(X(s.d[i0]), Y(col[i0]));
+    for (let i = i0 + 1; i <= i1; i++) ctx.lineTo(X(s.d[i]), Y(col[i]));
     ctx.globalAlpha = alpha; ctx.strokeStyle = color;
-    ctx.lineWidth = width * dpr; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.lineWidth = width * dpr; ctx.stroke();
+    ctx.restore(); ctx.globalAlpha = 1;
   }
-  const cols = cfg.cols || [cfg.col];
-  if (state.lapB)
-    for (const c of cols)
-      trace(state.lapB, c, cfg.cols ? colColors[c] : "#fb923c", 0.45, 1);
-  for (const c of cols)
-    trace(A, c, cfg.cols ? colColors[c] : "#22d3ee", 1, 1.5);
+  if (state.lapB) trace(state.lapB, "#fb923c", 0.5, 1);
+  trace(A, "#22d3ee", 1, 1.5);
 
-  chartCache[cfg.id] = { img: ctx.getImageData(0, 0, w, h), maxD, w, h };
+  chartCache[cfg.id] = { img: ctx.getImageData(0, 0, w, h), d0, d1, w, h };
 }
 
 function buildDeltaChart() {
@@ -718,9 +892,11 @@ function buildDeltaChart() {
   const A = state.lapA, B = state.lapB;
   const maxD = Math.min(A.maxD, B.maxD);
   const chartMaxD = Math.max(A.maxD, B.maxD);
+  const d0 = state.viewD ? state.viewD[0] : 0;
+  const d1 = state.viewD ? Math.min(state.viewD[1], chartMaxD) : chartMaxD;
   const grid = [], delta = [];
   let dmax = 0.05;
-  for (let d = 0; d <= maxD; d += 8) {
+  for (let d = Math.min(d0, maxD); d <= Math.min(d1, maxD); d += 8) {
     const dt = (interp(A.samples.d, A.samples.t, d) -
                 interp(B.samples.d, B.samples.t, d)) / 1000;
     grid.push(d); delta.push(dt);
@@ -728,12 +904,13 @@ function buildDeltaChart() {
   }
   dmax *= 1.1;
   const w = cv.width, h = cv.height;
-  const X = (d) => (d / chartMaxD) * w;
+  const X = (d) => ((d - d0) / (d1 - d0)) * w;
   const Y = (v) => (1 - (v + dmax) / (2 * dmax)) * (h - 6 * dpr) + 3 * dpr;
   ctx.fillStyle = "#0e0f13"; ctx.fillRect(0, 0, w, h);
   drawSectorBands(ctx, A, X, w, h);
   ctx.strokeStyle = "#2b2e37";
-  ctx.beginPath(); ctx.moveTo(0, Y(0)); ctx.lineTo(X(maxD), Y(0)); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(X(Math.min(d0, maxD)), Y(0));
+  ctx.lineTo(X(Math.min(maxD, d1)), Y(0)); ctx.stroke();
 
   // fill: above zero = losing time (red), below = gaining (green)
   for (let i = 1; i < grid.length; i++) {
@@ -741,16 +918,18 @@ function buildDeltaChart() {
     ctx.fillRect(X(grid[i - 1]), Math.min(Y(0), Y(delta[i])),
                  X(grid[i]) - X(grid[i - 1]), Math.abs(Y(delta[i]) - Y(0)));
   }
-  ctx.beginPath();
-  ctx.moveTo(X(grid[0]), Y(delta[0]));
-  for (let i = 1; i < grid.length; i++) ctx.lineTo(X(grid[i]), Y(delta[i]));
-  ctx.strokeStyle = "#dbe2ee"; ctx.lineWidth = 1.2 * dpr; ctx.stroke();
+  if (grid.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(X(grid[0]), Y(delta[0]));
+    for (let i = 1; i < grid.length; i++) ctx.lineTo(X(grid[i]), Y(delta[i]));
+    ctx.strokeStyle = "#dbe2ee"; ctx.lineWidth = 1.2 * dpr; ctx.stroke();
+  }
 
   // scale label
   ctx.fillStyle = "#7d8798"; ctx.font = `${10 * dpr}px sans-serif`;
   ctx.fillText("±" + dmax.toFixed(2) + "s", 6 * dpr, 12 * dpr);
 
-  chartCache["ch-delta"] = { img: ctx.getImageData(0, 0, w, h), maxD: chartMaxD, w, h };
+  chartCache["ch-delta"] = { img: ctx.getImageData(0, 0, w, h), d0, d1, w, h };
 }
 
 function drawChartCursors() {
@@ -760,7 +939,8 @@ function drawChartCursors() {
     const c = chartCache[id];
     const ctx = $(id).getContext("2d");
     ctx.putImageData(c.img, 0, 0);
-    const x = (dA / c.maxD) * c.w;
+    if (dA < c.d0 || dA > c.d1) continue;   // playhead outside the zoomed section
+    const x = ((dA - c.d0) / (c.d1 - c.d0)) * c.w;
     ctx.strokeStyle = "rgba(219,226,238,.7)"; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, c.h); ctx.stroke();
   }
@@ -772,11 +952,11 @@ function chartSeek(e, cv) {
   if (!cache) return;
   const r = cv.getBoundingClientRect();
   const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-  const d = frac * cache.maxD;
+  const d = cache.d0 + frac * (cache.d1 - cache.d0);
   seek(interp(state.lapA.samples.d, state.lapA.samples.t,
               Math.min(d, state.lapA.maxD)));
 }
-for (const id of ["ch-speed", "ch-pedals", "ch-steer", "ch-delta"]) {
+for (const id of ["ch-speed", "ch-thr", "ch-brk", "ch-steer", "ch-delta"]) {
   const cv = $(id);
   let dragging = false;
   cv.addEventListener("mousedown", (e) => { dragging = true; chartSeek(e, cv); });
@@ -807,6 +987,8 @@ function rebuildScene() {
   updateToolbar();
   updateSectorCard();
   updateScrubTint();
+  state.viewD = computeViewD();   // zoom carries over between laps
+  updateZoomChip();
   for (const cfg of charts) buildChart(cfg);
   buildDeltaChart();
   drawFrame();
@@ -936,8 +1118,15 @@ $("speed-select").addEventListener("change", (e) => {
 $("scrub").addEventListener("input", (e) => {
   if (state.lapA) seek((e.target.value / 1000) * state.lapA.duration);
 });
-$("session-select").addEventListener("change", (e) => {
-  selectSession(parseInt(e.target.value, 10));
+$("track-select").addEventListener("change", async (e) => {
+  const id = parseInt(e.target.value, 10);
+  if (id !== state.trackId) {   // new track: current lap/ref no longer apply
+    state.lapA = state.lapB = null;
+    state.mapZoom = null; state.viewD = null;
+    state.playing = false;
+  }
+  await selectTrack(id);
+  rebuildScene();
 });
 $("mode-seg").addEventListener("click", (e) => {
   const b = e.target.closest("button");
@@ -1000,7 +1189,7 @@ window.addEventListener("unhandledrejection", (e) => showToast(String(e.reason))
 
 initHalo();
 requestAnimationFrame(loop);
-loadSessions(false).catch((e) => showToast("could not load sessions: " + e.message));
+loadTracks(false).catch((e) => showToast("could not load tracks: " + e.message));
 pollStatus();
 {
   const st = $("js-stamp");

@@ -41,7 +41,7 @@ class Recorder(threading.Thread):
         self.status = {
             "listening": False, "udp_port": udp_port, "packets": 0, "pps": 0,
             "packet_format": None, "session": None, "live": None,
-            "last_lap": None, "warnings": [],
+            "last_lap": None, "ghosts": None, "warnings": [],
         }
         self._status_lock = threading.Lock()
         self._reset_session_state(None)
@@ -190,6 +190,12 @@ class Recorder(threading.Thread):
     def _on_lap_data(self, data, fmt):
         cars, pb_idx, rival_idx = packets.parse_lap_data(data, fmt)
         self.pb_idx, self.rival_idx = pb_idx, rival_idx
+        self._set_status(ghosts={
+            "pb": pb_idx != 255,
+            "pb_data": pb_idx in self.telem,
+            "rival": rival_idx != 255,
+            "rival_data": rival_idx in self.telem,
+        })
 
         for idx in self._wanted():
             cl = cars.get(idx)

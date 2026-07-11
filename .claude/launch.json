@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "f1lab"],
       "port": 8020
+    },
+    {
+      "name": "f1lab-dev",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "f1lab", "--http-port", "8031", "--udp-port", "20790"],
+      "port": 8031
     }
   ]
 }

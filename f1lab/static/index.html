@@ -25,16 +25,18 @@ if (location.protocol === "file:") {
   <div class="brand"><b>F1</b><span>LAB</span></div>
   <div id="js-stamp" class="chip idle" title="scripts did not run — check the browser console">JS ✗</div>
   <div id="status-chip" class="chip idle">IDLE</div>
+  <div id="ghost-chip" class="chip idle" style="display:none"
+       title="whether the game is broadcasting ghost-car telemetry (Time Trial: load a rival and keep the ghost car enabled)">GHOST</div>
   <div id="status-detail"></div>
   <div class="spacer"></div>
-  <select id="session-select"></select>
+  <select id="track-select" title="track — all laps ever recorded on it, from every session"></select>
 </header>
 
 <div id="layout">
   <aside id="sidebar">
     <div class="side-head">
       <span>LAPS</span>
-      <span class="hint">click = view · ⭐ = reference</span>
+      <span class="hint">click = view · REF = compare against</span>
     </div>
     <div id="lap-list"></div>
   </aside>
@@ -136,6 +138,10 @@ if (location.protocol === "file:") {
           <span id="leg-title"></span>
           <span id="leg-lo"></span><div id="leg-bar"></div><span id="leg-hi"></span>
         </div>
+        <div id="zoom-chip" style="display:none">
+          <span id="zoom-txt"></span>
+          <button id="zoom-reset" title="or double-click the map">RESET</button>
+        </div>
       </div>
 
       <div id="sector-card"></div>
@@ -144,8 +150,10 @@ if (location.protocol === "file:") {
         <h2>No lap selected</h2>
         <p>Drive some laps with the game broadcasting UDP telemetry to this
         machine, then pick a lap on the left.<br>
-        Set a second lap as <b>reference ⭐</b> to compare: ghost car, overlay
-        traces and a time-delta graph showing exactly where you gain or lose.</p>
+        Mark any other lap of the same track as <b>REF</b> to compare — even
+        from a different day: ghost car, overlay traces and a time-delta graph
+        showing exactly where you gain or lose.<br>
+        Scroll on the map to zoom into a corner; the charts follow.</p>
       </div>
     </div>
 
@@ -164,7 +172,8 @@ if (location.protocol === "file:") {
 
     <div id="charts">
       <div class="chart-row"><label>SPEED</label><canvas id="ch-speed" class="chart"></canvas></div>
-      <div class="chart-row"><label>THR / BRK</label><canvas id="ch-pedals" class="chart"></canvas></div>
+      <div class="chart-row"><label>THROTTLE</label><canvas id="ch-thr" class="chart"></canvas></div>
+      <div class="chart-row"><label>BRAKE</label><canvas id="ch-brk" class="chart"></canvas></div>
       <div class="chart-row"><label>STEER</label><canvas id="ch-steer" class="chart"></canvas></div>
       <div class="chart-row" id="delta-row" style="display:none">
         <label>DELTA</label><canvas id="ch-delta" class="chart"></canvas></div>
