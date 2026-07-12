@@ -47,12 +47,12 @@ The game can run on the same PC or a different one on the network — the
 recorder receives the telemetry either way:
 
 ```
- F1 25 (PC or console)            the computer running TRACE
- ┌───────────────────────┐        ┌──────────────────────────┐
- │ broadcasts telemetry  │ ─UDP─▶ │ recorder → data/*.db     │
- │ over UDP port 20777   │        │ viewer at localhost:8020 │
- └───────────────────────┘        │ browser (same computer)  │
-                                   └──────────────────────────┘
+ F1 25 (PC or console)                             TRACE (laptop or desktop)
+ ┌───────────────────────┐                         ┌──────────────────────────┐
+ │ broadcasts telemetry  │ ────────  UDP  ───────▶ │ recorder → data/*.db     │
+ │ over UDP port 20777   │                         │ viewer at localhost:8020 │
+ └───────────────────────┘                         │ browser (same machine)   │
+                                                   └──────────────────────────┘
 ```
 
 Details:
