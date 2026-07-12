@@ -1,6 +1,6 @@
 # TRACE — Racing Sim Telemetry Workbench for F1 25
 
-TRACE — the Telemetry Recording And Comparison Engine — records laps
+TRACE — the **T**elemetry **R**ecording **A**nd **C**omparison **E**ngine — records laps
 driven in **F1 25, the EA / Codemasters racing game**, for the 2026
 Season Pack. The game broadcasts live telemetry on track;
 TRACE captures every completed lap — the player's and the Time Trial
@@ -21,19 +21,14 @@ time-delta graph.*
 
 ## Run
 
-Double-click **`TRACE.bat`** (Windows) or **`TRACE.command`** (Mac).
-The viewer opens in the browser by itself; closing the terminal window
-stops TRACE.
+Nothing to install — any Python 3 will do, it's standard library only.
 
-So far this is only tested on macOS — the Windows launcher hasn't been
-tried yet. If it misbehaves, `python -m f1trace` from a terminal is the
-fallback.
+**Have the project folder?** Double-click **`TRACE.bat`** (Windows) or
+**`TRACE.command`** (Mac). The viewer opens in the browser by itself;
+closing the terminal window stops TRACE.
 
-On a Mac, if the project came as a zip download, the first double-click
-may be blocked — right-click the file and choose **Open** once.
-
-Or from a terminal: `python3 -m f1trace` in the project folder. Don't have
-the project yet? One pasted line downloads it and starts it — Mac:
+**Starting from nothing?** One pasted line downloads the project and
+starts it. Mac (Terminal):
 
 ```bash
 curl -L https://github.com/LMC4S/F1-25-Trace/archive/refs/heads/main.tar.gz | tar xz && cd F1-25-Trace-main && python3 -m f1trace
@@ -45,17 +40,18 @@ Windows (PowerShell):
 iwr https://github.com/LMC4S/F1-25-Trace/archive/refs/heads/main.zip -OutFile F1-25-Trace.zip; Expand-Archive F1-25-Trace.zip . -Force; cd F1-25-Trace-main; python -m f1trace
 ```
 
-Nothing to install: any Python 3 will do — it's standard library only.
+Details, when needed:
 
-- Recorder listens on UDP **20777**
-- Viewer at **http://localhost:8020**
-- Data stored in `data/f1trace.db` (SQLite)
-
-Options: `--udp-port`, `--http-port`, `--db`, `--no-browser`.
-
-To look around before hooking up the game, `python3 -m f1trace --demo`
-serves two bundled Melbourne laps, opened as a ready-made comparison.
-Demo mode records nothing and leaves the real lap database untouched.
+- Recorder listens on UDP **20777**; viewer at **http://localhost:8020**;
+  laps stored in `data/f1trace.db` (SQLite)
+- Options: `--udp-port`, `--http-port`, `--db`, `--no-browser`
+- `python3 -m f1trace --demo` — the two bundled Melbourne laps in the
+  local viewer, no game and no recording; the browser demo linked above,
+  but offline
+- Mac: if the project came as a zip download, the first double-click may
+  be blocked — right-click the launcher and choose **Open** once
+- The Windows launcher hasn't been tried yet; `python -m f1trace` from a
+  terminal is the fallback
 
 ## Game settings (on the PC running the game)
 
@@ -154,15 +150,6 @@ outlines** for every 2026-calendar track including Madrid
 (`f1trace/static/tracks.json`, built from the
 [f1-circuits](https://github.com/bacinger/f1-circuits) dataset via
 `tools/build_tracks.py`; such maps are labelled "approx.").
-
-## Testing without the game
-
-```bash
-python3 tools/fake_game.py --speedup 40
-```
-
-Replays the two bundled Melbourne laps from `f1trace/demo.db` (player +
-rival ghost) as real 2026-format UDP packets against the recorder.
 
 ## Layout
 
