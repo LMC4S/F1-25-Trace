@@ -1,6 +1,6 @@
-"""Fake F1 25 (2026 Season Pack) game: replays the two laps from
-`spa-lap.md` (next to this script) as real UDP telemetry so the whole
-pipeline can be tested without the game.
+"""Fake F1 25 (2026 Season Pack) game: replays the two bundled Melbourne
+laps from `f1lab/demo.db` as real UDP telemetry so the whole pipeline can
+be tested without the game.
 
 Player car (idx 0) drives the slower lap; the rival ghost (idx 1) drives
 the faster one and reproduces the real game's shadow-car quirks: it runs
@@ -9,8 +9,7 @@ rewinding when the player starts a new lap), its LapData sector fields
 are junk, and its CarTelemetry slot interleaves genuine frames with a
 constant flat-out placeholder (~486 km/h) — only Motion (position +
 velocity) and lapDistance are always genuine, which is exactly what the
-recorder relies on. Track geometry comes from the bundled Spa outline
-since the F1Laps export has no coordinates.
+recorder relies on. Positions are the laps' real recorded coordinates.
 
 Usage:  python3 tools/fake_game.py [--speedup 20] [--port 20777]
 """
@@ -19,11 +18,11 @@ import argparse
 import json
 import math
 import os
-import re
+import sqlite3
 import struct
 import socket
-import sys
 import time
+import zlib
 
 HEADER = struct.Struct("<HBBBBBQfIIBB")
 LAP_CAR = struct.Struct("<IIHBHBHBHBfffBBBBBBBBBBBBBBBHHBfB")
@@ -37,6 +36,9 @@ SESSION_LEAD = struct.Struct("<BbbBHBbB")
 N_CARS = 24
 UID = int(time.time())
 
+TRACK_ID = 0        # Melbourne
+LAP_LEN = 5276      # metres (sessions.track_length in demo.db)
+
 
 def header(pid, sim_t, frame):
     return HEADER.pack(2026, 26, 1, 0, 1, pid, UID, sim_t, frame, frame, 0, 255)
@@ -45,23 +47,27 @@ def header(pid, sim_t, frame):
 # ------------------------------------------------------------ lap data model
 
 class Lap:
-    """Distance-indexed telemetry + a time<->distance mapping."""
+    """Distance-indexed telemetry + the recorded time<->distance mapping."""
 
-    def __init__(self, d, spd, brk, thr, gear, steer, drs, temps, lap_ms):
-        self.d, self.spd, self.brk, self.thr = d, spd, brk, thr
-        self.gear, self.steer, self.drs, self.temps = gear, steer, drs, temps
+    def __init__(self, cols, lap_ms, s1_ms, s2_ms, setup):
+        self.d = cols["d"]
+        self.t = [ms / 1000.0 for ms in cols["t"]]
+        self.spd, self.brk, self.thr = cols["spd"], cols["brk"], cols["thr"]
+        self.gear, self.steer, self.drs = cols["gear"], cols["str"], cols["drs"]
+        self.temps = [cols["tfl"], cols["tfr"], cols["trl"], cols["trr"]]
+        self.x, self.z = cols["x"], cols["z"]
         self.lap_ms = lap_ms
-        # integrate time over distance from speed, then rescale to lap_ms
-        t, ts = 0.0, [0.0]
-        for i in range(1, len(d)):
-            v = max((spd[i] + spd[i - 1]) / 2.0 / 3.6, 5.0)  # m/s
-            t += (d[i] - d[i - 1]) / v
-            ts.append(t)
-        k = (lap_ms / 1000.0) / t
-        self.t = [x * k for x in ts]
+        self.s1_ms, self.s2_ms = s1_ms, s2_ms
+        self.setup = setup
 
     def dist_at(self, t_sec):
         return _interp(self.t, self.d, t_sec)
+
+    def time_at(self, dist):
+        return _interp(self.d, self.t, dist)
+
+    def pos_at(self, dist):
+        return _interp(self.d, self.x, dist), _interp(self.d, self.z, dist)
 
     def at(self, dist):
         g = _interp(self.d, self.gear, dist)
@@ -92,93 +98,39 @@ def _interp(xs, ys, x):
     return ys[lo] + (ys[hi] - ys[lo]) * f
 
 
-def load_data_md(path):
-    rows = []
-    with open(path) as f:
-        for line in f:
-            if re.match(r"^\d+,", line):
-                rows.append(line.strip().split(","))
-
-    def col(rows, idx):
-        out_d, out_v = [], []
-        for r in rows:
-            if idx < len(r) and r[idx] != "":
-                out_d.append(float(r[0]))
-                out_v.append(float(r[idx]))
-        return out_d, out_v
-
-    def build(idxs, lap_ms, lap_len, donor=None):
-        # idxs: spd, brk, thr, gear, steer, drs, tfl, tfr, trl, trr
-        d, spd = col(rows, idxs[0])
-        cols = []
-        for i in idxs[1:]:
-            # per-column distances can differ if gaps differ; re-sample
-            dd, vv = col(rows, i)
-            cols.append([_interp(dd, vv, x) for x in d])
-        brk, thr, gear, steer, drs, tfl, tfr, trl, trr = cols
-        allc = [spd, brk, thr, gear, steer, drs, tfl, tfr, trl, trr]
-        # exports can be truncated near the line; fill the missing tail from
-        # the donor lap's shape (it brakes for the same final corners)
-        if d[-1] < lap_len - 20 and donor is not None:
-            dd = d[-1] + 10.0
-            while dd < lap_len:
-                d.append(dd)
-                for c, dc in zip(allc, [donor.spd, donor.brk, donor.thr,
-                                        donor.gear, donor.steer, donor.drs] +
-                                 donor.temps):
-                    c.append(_interp(donor.d, dc, dd))
-                dd += 10.0
-        if d[-1] < lap_len:
-            d.append(float(lap_len))
-            for c in allc:
-                c.append(c[-1])
-        return Lap(d, spd, brk, thr, gear, steer, drs,
-                   [tfl, tfr, trl, trr], lap_ms)
-
-    pb = build([11, 12, 13, 14, 15, 16, 17, 18, 19, 20], 109189, 7004)
-    cur = build([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 108205, 7004, donor=pb)
-    return cur, pb
-
-
-# ------------------------------------------------------------ synthetic track
-
-def build_track(lap_len, track_id=10):
-    """Real circuit outline from tracks.json, arc-length indexed."""
+def load_demo_db():
+    """The two bundled Melbourne laps: (player 1:19.782, pb_ghost 1:18.758)."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    tracks = json.load(open(os.path.join(root, "f1lab", "static", "tracks.json")))
-    pts = tracks[str(track_id)]["pts"]
-    ds = [0.0]
-    for i in range(1, len(pts)):
-        ds.append(ds[-1] + math.hypot(pts[i][0] - pts[i - 1][0],
-                                      pts[i][1] - pts[i - 1][1]))
-    k = lap_len / ds[-1]
-    ds = [d * k for d in ds]
-    xs = [p[0] for p in pts]
-    zs = [p[1] for p in pts]
-
-    def pos(d):
-        d = d % lap_len
-        return _interp(ds, xs, d), _interp(ds, zs, d)
-    return pos
+    con = sqlite3.connect(os.path.join(root, "f1lab", "demo.db"))
+    laps = {}
+    for role, lap_ms, s1, s2, setup, blob in con.execute(
+            "SELECT car_role, lap_time_ms, s1_ms, s2_ms, setup, samples"
+            " FROM laps"):
+        cols = json.loads(zlib.decompress(blob))
+        laps[role] = Lap(cols, lap_ms, s1 or 0, s2 or 0,
+                         json.loads(setup) if setup else None)
+    return laps["player"], laps["pb_ghost"]
 
 
 # ------------------------------------------------------------ packet builders
 
-def lap_data_packet(sim_t, frame, cars):
+def lap_data_packet(sim_t, frame, cars, secd):
     body = b""
     for i in range(N_CARS):
         c = cars.get(i)
         if c is None:
             body += b"\x00" * LAP_CAR.size
             continue
-        s1 = c["s1"] if c["t_ms"] > 33000 else 0
-        s2 = c["s2"] if c["t_ms"] > 79000 else 0
+        # sector times appear on the timing screen once the sector is done
+        s1 = c["s1"] if c["t_ms"] > c["s1"] else 0
+        s2 = c["s2"] if c["t_ms"] > c["s1"] + c["s2"] else 0
         body += LAP_CAR.pack(
             c["last_ms"], c["t_ms"],
             s1 % 60000, s1 // 60000, s2 % 60000, s2 // 60000,
             0, 0, 0, 0,
             c["d"], c["total_d"], 0.0,
-            1, c["lap_num"], 0, 0, min(2, 0 if c["d"] < 2300 else 1 if c["d"] < 5600 else 2),
+            1, c["lap_num"], 0, 0,
+            0 if c["d"] < secd[0] else 1 if c["d"] < secd[1] else 2,
             0, 0, 0, 0, 0, 0, 1, 1, 2,
             0, 0, 0, 0, 0.0, 0)
     body += bytes([255, 1])  # TT PB ghost idx=none, rival idx=1
@@ -211,7 +163,7 @@ def telem_packet(sim_t, frame, cars):
             400, 400, 350, 350,
             t[2], t[3], t[0], t[1],      # surface: RL RR FL FR
             t[2], t[3], t[0], t[1], 95,
-            29.5, 29.5, 20.5, 20.5, 0, 0, 0, 0)
+            26.0, 26.0, 24.0, 24.0, 0, 0, 0, 0)
     body += bytes([0, 0]) + struct.pack("<b", 0)
     return header(6, sim_t, frame) + body
 
@@ -222,8 +174,9 @@ def status_packet(sim_t, frame, active):
         if i not in active:
             body += b"\x00" * STATUS_CAR.size
         else:
-            # tc=1 (medium) + abs=1 for the player, no assists for the rival
-            tc, abs_ = (1, 1) if i == 0 else (0, 0)
+            # player: TC full + ABS (matches the demo lap's assists);
+            # the ghost's CarStatus slot carries nothing useful
+            tc, abs_ = (2, 1) if i == 0 else (0, 0)
             body += STATUS_CAR.pack(tc, abs_, 1, 57, 0, 10.0, 110.0, 20.0,
                                     13000, 3500, 8, 1, 0, 20, 16, 2, 0,
                                     460.0, 120.0, 4e6, 3, 0.0, 0.0, 2e6, 0.0, 0)
@@ -244,52 +197,61 @@ def telem2_packet(sim_t, frame, cars):
 
 
 SETUP_CAR = struct.Struct("<BBBBffffBBBBBBBBBffffBf")
+SETUP_FIELDS = (
+    "front_wing", "rear_wing", "on_throttle", "off_throttle",
+    "front_camber", "rear_camber", "front_toe", "rear_toe",
+    "front_susp", "rear_susp", "front_arb", "rear_arb",
+    "front_height", "rear_height", "brake_pressure", "brake_bias",
+    "engine_braking", "tp_rl", "tp_rr", "tp_fl", "tp_fr",
+    "ballast", "fuel_load")
 # aiControlled, driverId u16, networkId u16, teamId u16, myTeam, raceNumber,
 # nationality, name[32], telemetryPublic, showNames, techLevel u16, platform
 PART_CAR = struct.Struct("<BHHHBBB32sBBHB")
 
 
-def session_packet(sim_t, frame, lap_len):
-    lead = SESSION_LEAD.pack(0, 27, 19, 1, lap_len, 18, 10, 0)  # TT at Spa
+def session_packet(sim_t, frame):
+    # Time Trial at Melbourne; weather/temps as in the recorded session
+    lead = SESSION_LEAD.pack(0, 29, 21, 1, LAP_LEN, 18, TRACK_ID, 0)
     # steering..dynamicRacingLineType live at offset 656 after the header:
-    # manual gearbox, corners-only racing line
-    assists = bytes([0, 0, 1, 0, 0, 0, 0, 1, 0])
+    # auto gearbox, ERS + DRS assists, full racing line (the demo lap's)
+    assists = bytes([0, 0, 3, 0, 0, 1, 1, 2, 0])
     body = lead + b"\x00" * (656 - len(lead)) + assists
     body += b"\x00" * (679 - len(body)) + b"\x01"   # equalCarPerformance on
     return header(1, sim_t, frame) + body + b"\x00" * (909 - len(body))
 
 
 def participants_packet(sim_t, frame):
-    teams = {0: 476, 1: 484}   # player Mercedes '26, rival McLaren '26
-    body = bytes([len(teams)])
+    # only the player is listed — the real game leaves ghost slots out of
+    # Participants, which is why recorded ghost laps have no team
+    body = bytes([1])
     for i in range(N_CARS):
-        if i in teams:
-            body += PART_CAR.pack(0 if i == 0 else 1, 0, 0, teams[i], 0,
-                                  44 + i, 0, b"FAKE DRIVER", 1, 1, 0, 1)
+        if i == 0:
+            body += PART_CAR.pack(0, 0, 0, 476, 0,   # Mercedes '26
+                                  44, 0, b"FAKE DRIVER", 1, 1, 0, 1)
             body += bytes([1]) + b"\x00" * 12   # numColours + livery colours
         else:
             body += b"\x00" * (PART_CAR.size + 13)
     return header(4, sim_t, frame) + body
 
 
-def setups_packet(sim_t, frame, active):
-    setups = {
-        0: SETUP_CAR.pack(31, 24, 60, 55, -3.0, -1.5, 0.05, 0.2, 40, 12, 10,
-                          9, 34, 55, 95, 57, 65, 22.5, 22.5, 23.5, 23.5,
-                          0, 12.5),
-        1: SETUP_CAR.pack(28, 20, 75, 60, -2.8, -1.2, 0.03, 0.15, 42, 14, 12,
-                          10, 32, 52, 100, 56, 70, 22.0, 22.0, 23.0, 23.0,
-                          0, 8.0),
-    }
-    body = b"".join(setups[i] if i in active and i in setups
-                    else b"\x00" * SETUP_CAR.size for i in range(N_CARS))
+def setups_packet(sim_t, frame, laps):
+    body = b""
+    for i in range(N_CARS):
+        lap = laps.get(i)
+        if lap is None or lap.setup is None:
+            body += b"\x00" * SETUP_CAR.size
+        else:
+            body += SETUP_CAR.pack(*(lap.setup[k] for k in SETUP_FIELDS))
     return header(5, sim_t, frame) + body + struct.pack("<f", 0.0)
 
 
-def tt_packet(sim_t, frame):
+def tt_packet(sim_t, frame, rival):
+    # the TimeTrial packet is the only genuine source of ghost sectors
     z = TT_SET.pack(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    rival = TT_SET.pack(1, 2, 108205, 32497, 45799, 29909, 0, 1, 0, 1, 1, 1)
-    return header(14, sim_t, frame) + z + z + rival
+    s1, s2, s3 = rival["s1"], rival["s2"], rival["s3"]
+    r = TT_SET.pack(1, 476, rival["lap_ms"], s1, s2, s3,
+                    1, 1, 1, 0, 1, 1)   # TC medium, manual+hint, ABS on
+    return header(14, sim_t, frame) + z + z + r
 
 
 # ------------------------------------------------------------ main loop
@@ -302,20 +264,26 @@ def main():
     ap.add_argument("--laps", type=int, default=1, help="full laps to drive")
     args = ap.parse_args()
 
-    here = os.path.dirname(os.path.abspath(__file__))
-    cur, pb = load_data_md(os.path.join(here, "spa-lap.md"))
-    lap_len = 7004
-    pos_of = build_track(lap_len)
+    player, ghost = load_demo_db()
+
+    # sector boundaries as track distances, from the player's sector times
+    secd = (player.dist_at(player.s1_ms / 1000.0),
+            player.dist_at((player.s1_ms + player.s2_ms) / 1000.0))
+    # the ghost lap has no stored sectors; derive them by clocking it
+    # through the same boundaries so the TimeTrial packet carries real ones
+    g1 = int(ghost.time_at(secd[0]) * 1000)
+    g2 = int(ghost.time_at(secd[1]) * 1000) - g1
+    rival_tt = {"lap_ms": ghost.lap_ms, "s1": g1, "s2": g2,
+                "s3": ghost.lap_ms - g1 - g2}
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     dest = (args.host, args.port)
 
-    # the player drives the slower PB columns; the faster lap becomes the
-    # rival ghost, so it finishes first and parks at the line (real-game
+    # the player drives the slower lap; the faster lap becomes the rival
+    # ghost, so it finishes first and parks at the line (real-game
     # shadow-car behaviour)
-    sectors = {0: (32640, 46317)}
-    laps = {0: pb, 1: cur}
-    end_t = max(cur.t[-1], pb.t[-1]) * args.laps + 8.0
+    laps = {0: player, 1: ghost}
+    end_t = max(player.t[-1], ghost.t[-1]) * args.laps + 8.0
 
     print("simulating %.0fs of Time Trial at %gx -> udp://%s:%d"
           % (end_t, args.speedup, *dest))
@@ -350,17 +318,17 @@ def main():
                     t_in = min(t_in, 8.0)  # cruise a bit into lap 2 then idle
                 d = lap.dist_at(t_in)
                 vals = lap.at(d)
-                s1, s2 = sectors[idx]
                 cars[idx] = {
                     "t_ms": int(t_in * 1000), "d": d,
-                    "total_d": (lap_num - 1) * lap_len + d,
+                    "total_d": (lap_num - 1) * LAP_LEN + d,
                     "lap_num": lap_num,
                     "last_ms": lap.lap_ms if lap_num > 1 else 0,
-                    "s1": s1, "s2": s2, **vals,
+                    "s1": lap.s1_ms, "s2": lap.s2_ms, **vals,
                 }
-            # world position + velocity along the track; Motion stays
-            # genuine even when the telemetry slot carries a placeholder
-            p0, p1 = pos_of(d), pos_of(d + 3.0)
+            # real recorded world position + velocity along the lap's own
+            # line; Motion stays genuine even when the telemetry slot
+            # carries a placeholder
+            p0, p1 = lap.pos_at(d), lap.pos_at(d + 3.0)
             hx, hz = p1[0] - p0[0], p1[1] - p0[1]
             hl = math.hypot(hx, hz) or 1.0
             v = vals["spd"] / 3.6
@@ -374,17 +342,17 @@ def main():
         sock.sendto(motion_packet(sim_t, frame, positions), dest)
         sock.sendto(telem_packet(sim_t, frame, cars), dest)
         sock.sendto(telem2_packet(sim_t, frame, cars), dest)
-        sock.sendto(lap_data_packet(sim_t, frame, cars), dest)
+        sock.sendto(lap_data_packet(sim_t, frame, cars, secd), dest)
         if sim_t >= next_session:
-            sock.sendto(session_packet(sim_t, frame, lap_len), dest)
+            sock.sendto(session_packet(sim_t, frame), dest)
             sock.sendto(participants_packet(sim_t, frame), dest)
             next_session = sim_t + 1.0
         if sim_t >= next_status:
             sock.sendto(status_packet(sim_t, frame, set(laps)), dest)
-            sock.sendto(setups_packet(sim_t, frame, set(laps)), dest)
+            sock.sendto(setups_packet(sim_t, frame, laps), dest)
             next_status = sim_t + 0.2
         if sim_t >= next_tt:
-            sock.sendto(tt_packet(sim_t, frame), dest)
+            sock.sendto(tt_packet(sim_t, frame, rival_tt), dest)
             next_tt = sim_t + 0.5
 
         sim_t += dt

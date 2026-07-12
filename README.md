@@ -150,8 +150,8 @@ outlines** for every 2026-calendar track including Madrid
 python3 tools/fake_game.py --speedup 40
 ```
 
-Replays the Spa lap from `tools/spa-lap.md` (player + rival ghost) as real
-2026-format UDP packets against the recorder.
+Replays the two bundled Melbourne laps from `f1lab/demo.db` (player +
+rival ghost) as real 2026-format UDP packets against the recorder.
 
 ## Layout
 
