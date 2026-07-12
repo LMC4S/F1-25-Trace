@@ -1,32 +1,32 @@
 # F1 Lab — Racing Sim Telemetry Workbench for F1 25
 
-F1 Lab records your laps in **F1 25, the EA / Codemasters racing game**,
-for the 2026 Season Pack. The game broadcasts live telemetry
-while you drive; F1 Lab captures every completed lap — yours and the Time
-Trial ghosts' — keeps them across sessions, and lets you replay and compare
-any two: track map, dashboard, input traces, time delta, and a badge on
-every corner that costs you time. The point is to show where a faster lap
-gains on you: which corners, and whether it's braking or throttle.
+F1 Lab records laps driven in **F1 25, the EA / Codemasters racing game**,
+for the 2026 Season Pack. The game broadcasts live telemetry on track;
+F1 Lab captures every completed lap — the player's and the Time Trial
+ghosts' — keeps them across sessions, and replays and compares any two:
+track map, dashboard, input traces, time delta, and a badge on every
+corner that costs time. The point is to show where a faster lap gains:
+which corners, and whether it's braking or throttle.
 
 *Unofficial fan project — not affiliated with Formula 1 or EA/Codemasters.*
 
-![Your PB ghost compared against your best recorded lap: speed-colored racing line, green corner badges, telemetry charts and delta trace](docs/img/compare-speed.png)
-*Your PB ghost vs today's best lap: racing line colored by speed, a badge
+![The PB ghost compared against the best recorded lap: speed-colored racing line, green corner badges, telemetry charts and delta trace](docs/img/compare-speed.png)
+*The PB ghost vs the day's best lap: racing line colored by speed, a badge
 on every corner where the PB gains 0.1 s or more, input traces and the
 time-delta graph.*
 
 ## Run
 
 Double-click **`F1 Lab.bat`** (Windows) or **`F1 Lab.command`** (Mac).
-The viewer opens in your browser by itself; close the terminal window
-when you're done and F1 Lab stops with it.
+The viewer opens in the browser by itself; closing the terminal window
+stops F1 Lab.
 
 So far this is only tested on macOS — the Windows launcher hasn't been
 tried yet. If it misbehaves, `python -m f1lab` from a terminal is the
 fallback.
 
-On a Mac the first double-click may be blocked if you downloaded the
-project as a zip — right-click the file and choose **Open** once.
+On a Mac, if the project came as a zip download, the first double-click
+may be blocked — right-click the file and choose **Open** once.
 
 Or from a terminal:
 
@@ -44,7 +44,7 @@ Options: `--udp-port`, `--http-port`, `--db`, `--no-browser`.
 
 To look around before hooking up the game, `python3 -m f1lab --demo`
 serves two bundled Melbourne laps, opened as a ready-made comparison.
-Demo mode records nothing and leaves your own lap database untouched.
+Demo mode records nothing and leaves the real lap database untouched.
 
 ## Game settings (on the PC running the game)
 
@@ -62,40 +62,40 @@ Demo mode records nothing and leaves your own lap database untouched.
 Then just drive. Every completed lap is stored automatically — yours **and the
 Time Trial ghosts'**.
 
-### How you know it's working
+### Connection status
 
-The chip next to the logo in the viewer header tells you whether telemetry
+The chip next to the logo in the viewer header shows whether telemetry
 is arriving:
 
 | Chip | Meaning |
 | --- | --- |
 | `LIVE … pps` | receiving — the number is packets per second, and the track / session / live lap time show next to it |
-| `IDLE` | listening but nothing arriving. Normal in menus (the game only broadcasts on track); if it stays IDLE while you drive, re-check the IP address and port above |
+| `IDLE` | listening but nothing arriving. Normal in menus (the game only broadcasts on track); if it stays IDLE while driving, re-check the IP address and port above |
 | `OFFLINE` | no recorder — usually another f1lab instance already holds the UDP port |
 
 Load into a session and the chip should flip to `LIVE` within a couple of
 seconds. In Time Trial a second chip shows the ghost situation
 (`RIVAL GHOST ✓` etc. — see below).
 
-## Ghost laps: your PB and any leaderboard entry
+## Ghost laps: the PB and any leaderboard entry
 
 In Time Trial the game broadcasts full telemetry for the ghosts on track,
-and the recorder stores their laps alongside yours: your personal-best
-ghost as `PB·G`, the rival ghost as `RIVAL`. Load any leaderboard entry as
-the rival — a friend, the top 10, the world record — and you get that
-driver's complete lap (position, speed, throttle, brake, steering) to
-compare against. No exports or downloads needed.
+and the recorder stores their laps alongside the player's: the
+personal-best ghost as `PB·G`, the rival ghost as `RIVAL`. Load any
+leaderboard entry as the rival — a friend, the top 10, the world record —
+and that driver's complete lap (position, speed, throttle, brake,
+steering) is captured to compare against. No exports or downloads needed.
 
 **Keep the ghost car enabled** — a disabled shadow car is not broadcast at
-all. While driving, the header shows `RIVAL GHOST ✓` when ghost telemetry is
-actually coming in, so you know before wasting a session.
+all. While driving, the header shows `RIVAL GHOST ✓` when ghost telemetry
+is actually coming in — visible before a session is wasted on it.
 
 ## Browsing and comparing laps
 
 Everything the recorder has stored is on the web page it serves at
 `http://localhost:8020`:
 
-- Pick a **track** in the header dropdown: every lap you ever recorded on it,
+- Pick a **track** in the header dropdown: every lap ever recorded on it,
   from all sessions, in one list (grouped by session). Sort **RECENT** or
   **FASTEST** (ranked, with gaps), filter YOU / GHOSTS and assists on/off,
   hide invalid laps.
@@ -105,22 +105,22 @@ Everything the recorder has stored is on the web page it serves at
   (speed, gear, throttle/brake arcs, rev lights, steering wheel, DRS/OT).
 - Mark any other lap as **VS** — from any session, any day: ghost dot,
   overlaid speed / throttle / brake / steering traces, and a **DELTA** graph
-  vs distance — green where you gain time on the reference, red where you
-  lose it.
+  vs distance — green where the viewed lap gains time on the reference,
+  red where it loses.
 - Next to each chart: the **values at the playhead**, both laps side by
   side — the mid-corner speed difference as a number, not just a gap
   between curves.
-- **Corner badges** on the map show every corner where you gain or lose
+- **Corner badges** on the map mark every corner gaining or losing
   0.1 s or more vs the reference. Time is attributed braking-point to
   braking-point, so a slow exit is charged to the corner that caused it and
   the badges account for the whole gap.
 - **Scroll on the map to zoom into a corner** (drag to pan, double-click or
-  RESET to fit): every chart re-scales to that stretch of track so you can
-  study braking points in detail.
+  RESET to fit): every chart re-scales to that stretch of track — braking
+  points in full detail.
 - Space = play/pause, ←/→ = seek 1 s (Shift = 5 s), click charts or map to seek.
 
 ![GAP mode: the racing line colored by who is faster where](docs/img/compare-gap.png)
-*GAP mode — track dominance: cyan where you're faster than the reference,
+*GAP mode — track dominance: cyan where the viewed lap is faster,
 orange where the reference is faster.*
 
 ![Zoomed into turn 3 with the lap tray collapsed: both racing lines and rescaled charts](docs/img/zoom-corner.png)
@@ -136,7 +136,8 @@ driving.*
 ## Track maps
 
 Laps recorded from the game are drawn from the car's **real world
-coordinates** — the map is exactly what you drove. For laps without position
+coordinates** — the map is exactly the line that was driven. For laps
+without position
 data (e.g. imports), the viewer falls back to bundled **real circuit
 outlines** for every 2026-calendar track including Madrid
 (`f1lab/static/tracks.json`, built from the
