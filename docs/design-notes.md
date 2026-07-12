@@ -190,6 +190,14 @@ The corner badges on the track map answer "which corner is costing me"
   most of the ramp near the top, where most of a lap lives. The ramp
   deliberately avoids the red/blue/yellow reserved for S1/S2/S3 and the
   orange reserved for the reference lap.
+- **Comparing adds a line instead of recoloring.** The viewed lap's
+  chart traces keep their channel colors (speed cyan, throttle green,
+  brake red, steer violet); the reference lap joins each panel as one
+  neutral grey-white line — thinner, dashed, semi-transparent. Identity
+  is carried by the line treatment rather than by hue, so no channel
+  color ever has to double as "whose lap is this", and the pairing
+  survives color-blindness. On the map, the TIMING card and the
+  dominance bar the reference stays orange.
 - **Road surface vs background**: the road (`#1b202a`, edge `#3a4150`)
   sits one step above the near-black carbon-weave background — visible
   as a surface, but muted enough that the saturated racing line and the

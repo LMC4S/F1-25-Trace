@@ -129,9 +129,10 @@ Everything the recorder has stored is on the web page it serves at
 - Click a lap to replay it: dot on the track map + instrument cluster
   (speed, gear, throttle/brake arcs, rev lights, steering wheel, DRS/OT).
 - Mark any other lap as **VS** — from any session, any day: ghost dot,
-  overlaid speed / throttle / brake / steering traces, and a **DELTA** graph
-  vs distance — green where the viewed lap gains time on the reference,
-  red where it loses.
+  overlaid speed / throttle / brake / steering traces (yours keep their
+  colors, the reference joins as a dashed grey ghost line), and a
+  **DELTA** graph vs distance — green where the viewed lap gains time on
+  the reference, red where it loses.
 - Next to each chart: the **values at the playhead**, both laps side by
   side — the mid-corner speed difference as a number, not just a gap
   between curves.
@@ -139,9 +140,9 @@ Everything the recorder has stored is on the web page it serves at
   0.1 s or more vs the reference. Time is attributed braking-point to
   braking-point, so a slow exit is charged to the corner that caused it and
   the badges account for the whole gap.
-- **Scroll on the map to zoom into a corner** (drag to pan, double-click or
-  RESET to fit): every chart re-scales to that stretch of track — braking
-  points in full detail.
+- **Scroll on the map — or on any chart — to zoom into a corner** (drag
+  the map to pan, double-click or RESET to fit): map and charts stay in
+  sync on that stretch of track — braking points in full detail.
 - Space = play/pause, ←/→ = seek 1 s (Shift = 5 s), click charts or map to seek.
 
 ![GAP mode: the racing line colored by who is faster where](docs/img/compare-gap.png)
@@ -158,12 +159,22 @@ brakes later.*
 lap's, so a time difference can be traced to the car, not just the
 driving.*
 
+## Sharing laps
+
+**EXPORT** (next to SETUP) saves the viewed lap as a `.trace` file — the
+lap and its session info as compressed JSON, tens of kilobytes, small
+enough for any chat. Got a `.trace` file from someone else? Drop it
+anywhere on the TRACE window: their lap appears under its original
+session with a **GUEST** badge, lives in the GHOSTS filter, and compares
+like any local ghost — corner badges, delta graph and all. Re-importing
+a lap that is already in the database is detected and skipped.
+
 ## Track maps
 
 Laps recorded from the game are drawn from the car's **real world
 coordinates** — the map is exactly the line that was driven. For laps
 without position
-data (e.g. imports), the viewer falls back to bundled **real circuit
+data, the viewer falls back to bundled **real circuit
 outlines** for every 2026-calendar track including Madrid
 (`f1trace/static/tracks.json`, built from the
 [f1-circuits](https://github.com/bacinger/f1-circuits) dataset via

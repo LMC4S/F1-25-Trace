@@ -116,11 +116,22 @@ as "not recorded".
 | `GET /api/tracks` | tracks that have laps, with lap counts + bests |
 | `GET /api/tracks/{id}/laps` | every lap ever recorded on a track, all sessions |
 | `GET /api/laps/{id}` | one lap: metadata + decompressed samples |
+| `GET /api/laps/{id}/export` | the lap as a downloadable `.trace` file |
+| `POST /api/import` | store an uploaded `.trace` file as a `guest` lap |
 | `DELETE /api/laps/{id}`, `/api/laps/invalid`, `/api/sessions/{id}` | cleanup |
 
 Responses are gzipped when the client accepts it. The viewer polls
 `/api/status` once a second for the LIVE/IDLE chip, ghost indicators and
 auto-refresh when a new lap lands.
+
+A `.trace` file is one lap plus its session row as gzipped JSON
+(`{"trace": 1, "session": …, "lap": …, "samples": …}`), meant to be sent
+to another TRACE user and dropped onto their window. Import sanitises
+the file — track/session/team names are re-derived from the internal id
+tables, metadata is coerced to numbers, samples are validated — dedups
+against laps already in the database (session uid + lap time + sample
+count) and stores the lap under `car_role` `guest`, which the lap list
+shows as a GUEST badge and files under the GHOSTS filter.
 
 ## Viewer
 
@@ -149,15 +160,17 @@ handful of subsystems:
 - **Map rendering** — a static canvas (road ribbon, racing line colored
   by speed or by gap/dominance, sector gates, corner numbers, time-loss
   badges) redrawn only on zoom/resize/lap change, and a dynamic canvas
-  (car + ghost dots) redrawn per frame. Scroll zooms into a corner; the
-  charts re-scale to the zoomed distance range.
-- **Charts** — speed/throttle/brake/steer vs distance, viewed lap over
-  reference, plus a delta-time trace (green/red fill = gaining/losing).
-  Click/drag anywhere to seek; the playhead is shared with the map and
-  HUD.
+  (car + ghost dots) redrawn per frame. Scroll — on the map or on any
+  chart — zooms into a corner; the map view is the single source of
+  truth and the charts re-scale to its visible distance range.
+- **Charts** — speed/throttle/brake/steer vs distance in per-channel
+  colors, the reference lap overlaid as a dashed grey ghost line, plus a
+  delta-time trace (green/red fill = gaining/losing). Click/drag
+  anywhere to seek; the playhead is shared with the map and HUD.
 - **Halo HUD** — SVG instrument cluster (speed, gear, rev lights,
-  throttle/brake arcs, steering, DRS/overtake/aero), draggable,
-  steering section collapsible.
+  throttle/brake arcs, steering, DRS/overtake/aero), draggable. The red
+  card tags fold their cards in place (TELEMETRY, TIMING) or close them
+  (SETUP); the steering section folds separately via its STEER pill.
 - **Playback** — requestAnimationFrame loop advancing lap A's clock;
   the ghost dot shows where the reference lap was at the same elapsed
   time.
