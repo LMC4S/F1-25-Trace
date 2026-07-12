@@ -174,6 +174,9 @@ tools/fake_game.py  synthetic game for end-to-end testing
 
 ## License
 
-[AGPL-3.0](LICENSE). Bundled [Titillium Web](https://fonts.google.com/specimen/Titillium+Web)
-fonts are licensed under the [SIL Open Font License 1.1](f1lab/static/fonts/OFL.txt).
+Copyright (c) 2026 lmc4s. [AGPL-3.0](LICENSE) — free to use, modify and
+share; any modified version offered as a network service must publish its
+source under the same license. Bundled
+[Titillium Web](https://fonts.google.com/specimen/Titillium+Web) fonts are
+licensed under the [SIL Open Font License 1.1](f1lab/static/fonts/OFL.txt).
 Not affiliated with Formula 1 or EA/Codemasters.
