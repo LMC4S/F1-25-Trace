@@ -47,21 +47,19 @@ The game can run on the same PC or a different one on the network — the
 recorder receives the telemetry either way:
 
 ```
-   F1 25 (any PC on the LAN)            this PC
-  ┌───────────────────────┐        ┌──────────────────────────┐
-  │  broadcasts telemetry  │  UDP   │  recorder  →  data/*.db  │
-  │  over UDP :20777       │───────▶│               │          │
-  └───────────────────────┘        │            viewer :8020  │
-                                    │               │          │
-                                    │        browser (this PC) │
-                                    └──────────────────────────┘
+ F1 25 (PC or console)            the computer running TRACE
+ ┌───────────────────────┐        ┌──────────────────────────┐
+ │ broadcasts telemetry  │ ─UDP─▶ │ recorder → data/*.db     │
+ │ over UDP port 20777   │        │ viewer at localhost:8020 │
+ └───────────────────────┘        │ browser (same computer)  │
+                                   └──────────────────────────┘
 ```
 
 Details:
 
 - Recorder listens on UDP **20777** (all interfaces, so the game may be on
   another PC); viewer at **http://localhost:8020**, reachable only from
-  this PC; laps stored in `data/f1trace.db` (SQLite)
+  this computer; laps stored in `data/f1trace.db` (SQLite)
 - Options: `--udp-port`, `--http-port`, `--db`, `--no-browser`, `--host`
   (viewer bind address; defaults to `127.0.0.1` — set `0.0.0.0` to open the
   viewer to other devices on the network), `--version`
