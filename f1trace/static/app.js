@@ -1201,9 +1201,10 @@ function mapSeek(px, py) {
 }
 
 /* ------------------------------------------------- map zoom & pan
-   Wheel = zoom at cursor. Drag = pan (when zoomed). Plain click = seek.
-   Double-click / RESET = back to full track. While zoomed, the charts
-   focus on the visible stretch of track (state.viewD). */
+   Wheel = zoom at cursor (on the map or on any chart). Drag = pan (when
+   zoomed). Plain click = seek. Double-click / RESET = back to full track.
+   While zoomed, the charts focus on the visible stretch of track
+   (state.viewD); the map view is the single source of truth. */
 
 let zoomRaf = 0, zoomSettle = 0;
 
@@ -1579,12 +1580,36 @@ function chartSeek(e, cv) {
   seek(interp(state.lapA.samples.d, state.lapA.samples.t,
               Math.min(d, state.lapA.maxD)));
 }
+/* Wheel on a chart = the same map zoom, anchored at the track point under
+   the cursor's lap distance; state.viewD then brings the charts along. */
+function chartWheel(e, cv) {
+  if (!view || !state.lapA) return;
+  e.preventDefault();
+  const cache = chartCache[cv.id];
+  if (!cache) return;
+  const r = cv.getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  const s = state.lapA.samples;
+  const d = Math.min(cache.d0 + frac * (cache.d1 - cache.d0), state.lapA.maxD);
+  // keep that point's map pixel fixed while the scale changes, exactly
+  // like the map's own wheel handler does with the point under the cursor
+  const px = W2X(interp(s.d, s.x, d)), py = W2Y(interp(s.d, s.z, d));
+  const f = Math.exp(-e.deltaY * 0.0015);
+  const k = Math.min(40, Math.max(1, (view.scale / view.baseScale) * f));
+  const scale = view.baseScale * k;
+  view.ox = px - X2W(px) * scale;
+  view.oy = py + Y2W(py) * scale;
+  view.scale = scale;
+  afterZoomGesture();
+}
+
 for (const id of ["ch-speed", "ch-thr", "ch-brk", "ch-steer", "ch-delta"]) {
   const cv = $(id);
   let dragging = false;
   cv.addEventListener("mousedown", (e) => { dragging = true; chartSeek(e, cv); });
   window.addEventListener("mousemove", (e) => { if (dragging) chartSeek(e, cv); });
   window.addEventListener("mouseup", () => { dragging = false; });
+  cv.addEventListener("wheel", (e) => chartWheel(e, cv), { passive: false });
 }
 
 /* ---------------------------------------------------------------- scene & playback */
