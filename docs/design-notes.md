@@ -65,7 +65,7 @@ as-is.
 ### The fix, and why it is shaped this way
 
 Two moves, one rule, one threshold
-([recorder.py](../f1lab/recorder.py), sampling loop, ghost branch only):
+([recorder.py](../f1trace/recorder.py), sampling loop, ghost branch only):
 
 1. **Ghost speed always comes from Motion** (`|world velocity| * 3.6`),
    never from CarTelemetry. No detection needed — the genuine source is
@@ -198,12 +198,12 @@ The corner badges on the track map answer "which corner is costing me"
 ## Operational notes
 
 - The recorder is typically run as a detached process
-  (`nohup python3 -u -m f1lab >> data/f1lab.log 2>&1 &`). Python loads
+  (`nohup python3 -u -m f1trace >> data/f1trace.log 2>&1 &`). Python loads
   modules once: **after editing recorder/packet code, restart the
   process**, or it keeps recording with stale logic. (This cost one
   evening of ghost laps recorded with placeholder speeds after the fix
   already existed on disk.)
-- Quick staleness check: compare `ps` start time of `python … -m f1lab`
+- Quick staleness check: compare `ps` start time of `python … -m f1trace`
   against source mtimes.
 - Safe-restart check: `GET /api/status` — `pps` (packets per second) is
   0 when the game is idle, so restarting loses nothing.

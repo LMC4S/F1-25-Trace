@@ -36,7 +36,7 @@ class LapBuffer:
 
 class Recorder(threading.Thread):
     def __init__(self, db_path, udp_port=20777):
-        super().__init__(daemon=True, name="f1lab-recorder")
+        super().__init__(daemon=True, name="f1trace-recorder")
         self.db_path = db_path
         self.udp_port = udp_port
         self.status = {
@@ -84,7 +84,7 @@ class Recorder(threading.Thread):
         with self._status_lock:
             if msg not in self.status["warnings"]:
                 self.status["warnings"].append(msg)
-                print("[f1lab] WARNING: %s" % msg)
+                print("[f1trace] WARNING: %s" % msg)
 
     # ---------------------------------------------------------- main loop
 
@@ -95,13 +95,13 @@ class Recorder(threading.Thread):
         try:
             sock.bind(("0.0.0.0", self.udp_port))
         except OSError:
-            msg = ("UDP port %d is already in use — another f1lab instance "
+            msg = ("UDP port %d is already in use — another TRACE instance "
                    "is probably running. Not recording." % self.udp_port)
             self._warn_once(msg)
             return
         sock.settimeout(1.0)
         self._set_status(listening=True)
-        print("[f1lab] listening for telemetry on UDP %d" % self.udp_port)
+        print("[f1trace] listening for telemetry on UDP %d" % self.udp_port)
 
         n_packets = 0
         window_start = time.time()
@@ -197,7 +197,7 @@ class Recorder(threading.Thread):
                  s["weather"], s["air_temp"], s["track_temp"], s["track_length"]))
             self.con.commit()
             self.session_row_id = cur.lastrowid
-            print("[f1lab] new session: %s %s" % (
+            print("[f1trace] new session: %s %s" % (
                 ids.track_name(s["track_id"]),
                 ids.session_type_name(s["session_type"])))
         self._set_status(session={
@@ -356,7 +356,7 @@ class Recorder(threading.Thread):
                         "reason": reason, "lap_time_ms": lap_time_ms,
                         "samples": len(samples), "span_m": int(span)}
                 self._set_status(last_drop=info)
-                print("[f1lab] dropped %s lap: %s" % (role, info))
+                print("[f1trace] dropped %s lap: %s" % (role, info))
 
         if lap_time_ms <= 0:
             return drop("no lap time (lap counter jumped or time missing)")
@@ -410,7 +410,7 @@ class Recorder(threading.Thread):
              json.dumps(assists) if assists else None,
              self.teams.get(idx)))
         self.con.commit()
-        print("[f1lab] stored %s lap %d — %s%s" % (
+        print("[f1trace] stored %s lap %d — %s%s" % (
             role, buf.lap_num, _fmt_time(lap_time_ms),
             "" if not buf.invalid else " (invalid)"))
         self._set_status(last_lap={

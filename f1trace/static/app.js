@@ -1,4 +1,4 @@
-/* F1 Lab viewer: lap browser, track-map replay, halo HUD, comparison. */
+/* TRACE viewer: lap browser, track-map replay, halo HUD, comparison. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -133,7 +133,9 @@ function trackGeom(tid) {
   geom.version = 0;
   geom.xform = null;   // affine game->outline map (set by calibration)
   try {
-    // "cal2": xform is fitted in the rotated frame, older entries are not
+    // "cal2": xform is fitted in the rotated frame, older entries are not.
+    // localStorage keys keep the pre-rename "f1lab." prefix so saved
+    // calibrations and layout survive the TRACE rename.
     const cal = JSON.parse(localStorage.getItem("f1lab.cal2." + tid));
     if (cal && "m" in cal) {
       applyCal(geom, cal);

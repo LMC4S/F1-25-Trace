@@ -1,6 +1,6 @@
 """Bake the browser demo into a static site (for GitHub Pages).
 
-Copies the viewer (f1lab/static/) and pre-renders the JSON the viewer
+Copies the viewer (f1trace/static/) and pre-renders the JSON the viewer
 fetches — the same responses server.py would give for demo.db — as plain
 files under api/. The status response carries "static": true, which the
 viewer reads as "read-only: hide the delete buttons".
@@ -17,7 +17,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from f1lab import db, ids  # noqa: E402
+from f1trace import db, ids  # noqa: E402
 
 
 def dump(out, path, obj):
@@ -30,9 +30,9 @@ def dump(out, path, obj):
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "_site"
     shutil.rmtree(out, ignore_errors=True)
-    shutil.copytree(os.path.join(ROOT, "f1lab", "static"), out)
+    shutil.copytree(os.path.join(ROOT, "f1trace", "static"), out)
 
-    con = sqlite3.connect(os.path.join(ROOT, "f1lab", "demo.db"))
+    con = sqlite3.connect(os.path.join(ROOT, "f1trace", "demo.db"))
     con.row_factory = sqlite3.Row
 
     dump(out, "api/status", {"listening": False, "demo": True, "static": True})

@@ -168,7 +168,7 @@ def make_handler(db_path, recorder, demo=False):
 def serve(db_path, recorder, http_port=8020, demo=False, open_browser=False):
     server = ThreadingHTTPServer(("0.0.0.0", http_port),
                                  make_handler(db_path, recorder, demo))
-    print("[f1lab] viewer at http://localhost:%d" % http_port)
+    print("[f1trace] viewer at http://localhost:%d" % http_port)
     if open_browser:
         webbrowser.open("http://localhost:%d" % http_port)
     server.serve_forever()

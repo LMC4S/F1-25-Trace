@@ -1,4 +1,4 @@
-"""Build f1lab/static/tracks.json from the f1-circuits GeoJSON dataset
+"""Build f1trace/static/tracks.json from the f1-circuits GeoJSON dataset
 (github.com/bacinger/f1-circuits): real circuit outlines for every track
 on the game's 2026 calendar, keyed by the game's trackId.
 
@@ -77,7 +77,7 @@ def main():
     for alias, base in ALIASES.items():
         out[str(alias)] = out[str(base)]
     dest = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "f1lab", "static", "tracks.json")
+                        "f1trace", "static", "tracks.json")
     with open(dest, "w") as f:
         json.dump(out, f, separators=(",", ":"))
     print("wrote %s (%.0f KB)" % (dest, os.path.getsize(dest) / 1024))

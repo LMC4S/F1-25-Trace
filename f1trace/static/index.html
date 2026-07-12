@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>F1 Lab</title>
+<title>TRACE</title>
 <link rel="stylesheet" href="titillium.css">
 <link rel="stylesheet" href="style.css">
 <script>
@@ -14,7 +14,7 @@ if (location.protocol === "file:") {
       'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:40px">' +
       "<div><h2>This page can't run as a file</h2>" +
       "You opened index.html directly. Instead:<br><br>" +
-      "1. Run <code style='color:#22d3ee'>python3 -m f1lab</code> in the F1-udp folder<br>" +
+      "1. Run <code style='color:#22d3ee'>python3 -m f1trace</code> in the project folder<br>" +
       "2. Open <a href='http://localhost:8020' style='color:#22d3ee'>http://localhost:8020</a> in your browser</div></div>";
   });
 }
@@ -22,7 +22,7 @@ if (location.protocol === "file:") {
 </head>
 <body>
 <header>
-  <div class="brand"><b>F1</b><span>LAB</span></div>
+  <div class="brand"><b>F1</b><span>TRACE</span></div>
   <div id="status-chip" class="chip idle">IDLE</div>
   <div id="ghost-chip" class="chip idle" style="display:none"
        title="whether the game is broadcasting ghost-car telemetry (Time Trial: load a rival and keep the ghost car enabled)">GHOST</div>

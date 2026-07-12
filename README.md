@@ -1,8 +1,9 @@
-# F1 Lab — Racing Sim Telemetry Workbench for F1 25
+# TRACE — Racing Sim Telemetry Workbench for F1 25
 
-F1 Lab records laps driven in **F1 25, the EA / Codemasters racing game**,
-for the 2026 Season Pack. The game broadcasts live telemetry on track;
-F1 Lab captures every completed lap — the player's and the Time Trial
+TRACE — the Telemetry Recording And Comparison Engine — records laps
+driven in **F1 25, the EA / Codemasters racing game**, for the 2026
+Season Pack. The game broadcasts live telemetry on track;
+TRACE captures every completed lap — the player's and the Time Trial
 ghosts' — keeps them across sessions, and replays and compares any two:
 track map, dashboard, input traces, time delta, and a badge on every
 corner that costs time. The point is to show where a faster lap gains:
@@ -10,7 +11,7 @@ which corners, and whether it's braking or throttle.
 
 *Unofficial fan project — not affiliated with Formula 1 or EA/Codemasters.*
 
-**[Try it in your browser](https://lmc4s.github.io/F1-Lab/)** — the two
+**[Try it in your browser](https://lmc4s.github.io/F1-25-Trace/)** — the two
 bundled demo laps in the full viewer, nothing to install.
 
 ![The PB ghost compared against the best recorded lap: speed-colored racing line, green corner badges, telemetry charts and delta trace](docs/img/compare-speed.png)
@@ -20,39 +21,39 @@ time-delta graph.*
 
 ## Run
 
-Double-click **`F1 Lab.bat`** (Windows) or **`F1 Lab.command`** (Mac).
+Double-click **`TRACE.bat`** (Windows) or **`TRACE.command`** (Mac).
 The viewer opens in the browser by itself; closing the terminal window
-stops F1 Lab.
+stops TRACE.
 
 So far this is only tested on macOS — the Windows launcher hasn't been
-tried yet. If it misbehaves, `python -m f1lab` from a terminal is the
+tried yet. If it misbehaves, `python -m f1trace` from a terminal is the
 fallback.
 
 On a Mac, if the project came as a zip download, the first double-click
 may be blocked — right-click the file and choose **Open** once.
 
-Or from a terminal: `python3 -m f1lab` in the project folder. Don't have
+Or from a terminal: `python3 -m f1trace` in the project folder. Don't have
 the project yet? One pasted line downloads it and starts it — Mac:
 
 ```bash
-curl -L https://github.com/LMC4S/F1-Lab/archive/refs/heads/main.tar.gz | tar xz && cd F1-Lab-main && python3 -m f1lab
+curl -L https://github.com/LMC4S/F1-25-Trace/archive/refs/heads/main.tar.gz | tar xz && cd F1-25-Trace-main && python3 -m f1trace
 ```
 
 Windows (PowerShell):
 
 ```powershell
-iwr https://github.com/LMC4S/F1-Lab/archive/refs/heads/main.zip -OutFile F1-Lab.zip; Expand-Archive F1-Lab.zip . -Force; cd F1-Lab-main; python -m f1lab
+iwr https://github.com/LMC4S/F1-25-Trace/archive/refs/heads/main.zip -OutFile F1-25-Trace.zip; Expand-Archive F1-25-Trace.zip . -Force; cd F1-25-Trace-main; python -m f1trace
 ```
 
 Nothing to install: any Python 3 will do — it's standard library only.
 
 - Recorder listens on UDP **20777**
 - Viewer at **http://localhost:8020**
-- Data stored in `data/f1lab.db` (SQLite)
+- Data stored in `data/f1trace.db` (SQLite)
 
 Options: `--udp-port`, `--http-port`, `--db`, `--no-browser`.
 
-To look around before hooking up the game, `python3 -m f1lab --demo`
+To look around before hooking up the game, `python3 -m f1trace --demo`
 serves two bundled Melbourne laps, opened as a ready-made comparison.
 Demo mode records nothing and leaves the real lap database untouched.
 
@@ -81,7 +82,7 @@ is arriving:
 | --- | --- |
 | `LIVE … pps` | receiving — the number is packets per second, and the track / session / live lap time show next to it |
 | `IDLE` | listening but nothing arriving. Normal in menus (the game only broadcasts on track); if it stays IDLE while driving, re-check the IP address and port above |
-| `OFFLINE` | no recorder — usually another f1lab instance already holds the UDP port |
+| `OFFLINE` | no recorder — usually another TRACE instance already holds the UDP port |
 
 Load into a session and the chip should flip to `LIVE` within a couple of
 seconds. In Time Trial a second chip shows the ghost situation
@@ -150,7 +151,7 @@ coordinates** — the map is exactly the line that was driven. For laps
 without position
 data (e.g. imports), the viewer falls back to bundled **real circuit
 outlines** for every 2026-calendar track including Madrid
-(`f1lab/static/tracks.json`, built from the
+(`f1trace/static/tracks.json`, built from the
 [f1-circuits](https://github.com/bacinger/f1-circuits) dataset via
 `tools/build_tracks.py`; such maps are labelled "approx.").
 
@@ -160,17 +161,17 @@ outlines** for every 2026-calendar track including Madrid
 python3 tools/fake_game.py --speedup 40
 ```
 
-Replays the two bundled Melbourne laps from `f1lab/demo.db` (player +
+Replays the two bundled Melbourne laps from `f1trace/demo.db` (player +
 rival ghost) as real 2026-format UDP packets against the recorder.
 
 ## Layout
 
 ```
-f1lab/packets.py    packet structs (2025 + 2026 formats, header-switched)
-f1lab/recorder.py   UDP listener, lap segmentation, ghost capture, flashback handling
-f1lab/db.py         SQLite schema; per-lap compressed column blobs
-f1lab/server.py     JSON API + static viewer
-f1lab/static/       single-page viewer (no build step)
+f1trace/packets.py    packet structs (2025 + 2026 formats, header-switched)
+f1trace/recorder.py   UDP listener, lap segmentation, ghost capture, flashback handling
+f1trace/db.py         SQLite schema; per-lap compressed column blobs
+f1trace/server.py     JSON API + static viewer
+f1trace/static/       single-page viewer (no build step)
 tools/fake_game.py  synthetic game for end-to-end testing
 ```
 
@@ -188,8 +189,8 @@ Copyright (c) 2026 lmc4s. [AGPL-3.0](LICENSE) — free to use, modify and
 share; any modified version offered as a network service must publish its
 source under the same license. Bundled
 [Titillium Web](https://fonts.google.com/specimen/Titillium+Web) fonts are
-licensed under the [SIL Open Font License 1.1](f1lab/static/fonts/OFL.txt).
-Bundled circuit outlines (`f1lab/static/tracks.json`) are derived from the
+licensed under the [SIL Open Font License 1.1](f1trace/static/fonts/OFL.txt).
+Bundled circuit outlines (`f1trace/static/tracks.json`) are derived from the
 [f1-circuits](https://github.com/bacinger/f1-circuits) dataset, © 2019–2025
-Tomislav Bacinger, [MIT License](f1lab/static/tracks-LICENSE.txt).
+Tomislav Bacinger, [MIT License](f1trace/static/tracks-LICENSE.txt).
 Not affiliated with Formula 1 or EA/Codemasters.

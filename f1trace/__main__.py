@@ -1,4 +1,4 @@
-"""Entry point: `python3 -m f1lab` starts the UDP recorder and the viewer."""
+"""Entry point: `python3 -m f1trace` starts the UDP recorder and the viewer."""
 
 import argparse
 import os
@@ -23,7 +23,7 @@ def lan_ip():
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="f1lab",
+    ap = argparse.ArgumentParser(prog="f1trace",
                                  description="F1 25/26 telemetry recorder + viewer")
     ap.add_argument("--udp-port", type=int, default=20777,
                     help="UDP port the game broadcasts to (default 20777)")
@@ -40,20 +40,25 @@ def main():
     if args.demo:
         # Work on a throwaway copy so the bundled file is never written to
         # (WAL sidecars, deletes from the viewer).
-        db_path = os.path.join(tempfile.mkdtemp(prefix="f1lab-demo-"),
+        db_path = os.path.join(tempfile.mkdtemp(prefix="f1trace-demo-"),
                                "demo.db")
         shutil.copyfile(os.path.join(os.path.dirname(
             os.path.abspath(__file__)), "demo.db"), db_path)
     else:
-        db_path = args.db or os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "data", "f1lab.db")
+        data_dir = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "data")
+        default = os.path.join(data_dir, "f1trace.db")
+        legacy = os.path.join(data_dir, "f1lab.db")  # pre-rename databases
+        if not os.path.exists(default) and os.path.exists(legacy):
+            default = legacy
+        db_path = args.db or default
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
     print("=" * 62)
     if args.demo:
-        print("  F1 Lab — demo: two bundled Melbourne laps, no recording")
+        print("  TRACE — demo: two bundled Melbourne laps, no recording")
     else:
-        print("  F1 Lab — telemetry recorder + viewer")
+        print("  TRACE — telemetry recorder + viewer")
         print("  In the game set:  Settings > Telemetry")
         print("    UDP Telemetry: On    UDP Broadcast: Off")
         print("    UDP IP Address: %s   Port: %d" % (lan_ip(), args.udp_port))
@@ -69,9 +74,9 @@ def main():
         server.serve(db_path, rec, http_port=args.http_port, demo=args.demo,
                      open_browser=not args.no_browser)
     except KeyboardInterrupt:
-        print("\n[f1lab] bye")
+        print("\n[f1trace] bye")
     except OSError:
-        print("\n[f1lab] port %d is already in use — f1lab seems to be "
+        print("\n[f1trace] port %d is already in use — TRACE seems to be "
               "running already.\n  Open http://localhost:%d in your browser, "
               "or stop the other instance first,\n  or start with "
               "--http-port/--udp-port to use different ports."

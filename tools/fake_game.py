@@ -1,5 +1,5 @@
 """Fake F1 25 (2026 Season Pack) game: replays the two bundled Melbourne
-laps from `f1lab/demo.db` as real UDP telemetry so the whole pipeline can
+laps from `f1trace/demo.db` as real UDP telemetry so the whole pipeline can
 be tested without the game.
 
 Player car (idx 0) drives the slower lap; the rival ghost (idx 1) drives
@@ -101,7 +101,7 @@ def _interp(xs, ys, x):
 def load_demo_db():
     """The two bundled Melbourne laps: (player 1:19.782, pb_ghost 1:18.758)."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    con = sqlite3.connect(os.path.join(root, "f1lab", "demo.db"))
+    con = sqlite3.connect(os.path.join(root, "f1trace", "demo.db"))
     laps = {}
     for role, lap_ms, s1, s2, setup, blob in con.execute(
             "SELECT car_role, lap_time_ms, s1_ms, s2_ms, setup, samples"
