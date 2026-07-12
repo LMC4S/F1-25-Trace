@@ -540,15 +540,20 @@ function prepLap(lap) {
   }
   // ghost speed is derived from lapDistance (the game broadcasts no real
   // speed for ghosts) and keeps a little quantisation ripple — take it
-  // out for display with one light binomial pass
+  // out for display with a Gaussian pass (sigma 2 frames: measured to
+  // remove every visible zigzag while leaving braking edges intact)
   if ((lap.car_role === "pb_ghost" || lap.car_role === "rival") &&
-      s.spd.length > 4 && !lap.spdSmoothed) {
+      s.spd.length > 12 && !lap.spdSmoothed) {
     lap.spdSmoothed = true;
-    const v = s.spd, n = v.length, sm = new Array(n);
-    for (let i = 0; i < n; i++)
-      sm[i] = Math.round((v[Math.max(0, i - 2)] + 4 * v[Math.max(0, i - 1)] +
-                          6 * v[i] + 4 * v[Math.min(n - 1, i + 1)] +
-                          v[Math.min(n - 1, i + 2)]) / 16);
+    const R = 6, w = [], v = s.spd, n = v.length, sm = new Array(n);
+    let sw = 0;
+    for (let k = -R; k <= R; k++) { w.push(Math.exp(-k * k / 8)); sw += w[k + R]; }
+    for (let i = 0; i < n; i++) {
+      let acc = 0;
+      for (let k = -R; k <= R; k++)
+        acc += w[k + R] * v[Math.min(n - 1, Math.max(0, i + k))];
+      sm[i] = Math.round(acc / sw);
+    }
     s.spd = sm;
   }
   const geom = trackGeom(lap.track_id);

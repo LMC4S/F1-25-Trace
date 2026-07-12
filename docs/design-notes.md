@@ -85,8 +85,11 @@ Two moves, one rule, one threshold
    lapDistance's update stutter without flattening the corners a linear
    fit at that width would (measured on a real Spa lap: frame-to-frame
    ripple >4 km/h dropped from 97 to 7 occurrences vs linear ±200 ms,
-   peak deceleration preserved). The viewer adds one light binomial pass
-   on ghost speed at display time; the stored channel stays unpadded.
+   peak deceleration preserved). The viewer adds a Gaussian pass (sigma
+   2 frames) on ghost speed at display time — measured as the narrowest
+   kernel that removes every visible zigzag (sawtooth sign-flip count 0,
+   the same as real player telemetry) while leaving braking edges
+   intact; the stored channel stays unsmoothed.
 2. **A telemetry frame is trusted only if it agrees with the derived
    speed**: `abs(telemetry_speed - derived_speed) > 30` km/h marks it as
    a placeholder, and the remaining channels (throttle, brake, gear,
