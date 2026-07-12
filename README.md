@@ -1,19 +1,19 @@
-# F1 Lab
+# F1 Lab — Racing Sim Telemetry Workbench for F1 25
 
-You're two seconds off the ghost. Which corners? Braking too early, or
-getting on the throttle too late?
+F1 Lab records your laps in **F1 25, the EA / Codemasters racing game**,
+for the 2026 Season Pack. The game broadcasts live telemetry
+while you drive; F1 Lab captures every completed lap — yours and the Time
+Trial ghosts' — keeps them across sessions, and lets you replay and compare
+any two: track map, dashboard, input traces, time delta, and a badge on
+every corner that costs you time. The point is to show where a faster lap
+gains on you: which corners, and whether it's braking or throttle.
 
-F1 Lab answers that for **F1 25, the EA / Codemasters racing game** (2026
-Season Pack supported — this is about the video game, not real-world F1).
-The game broadcasts live telemetry while you drive; F1 Lab records every
-completed lap — yours and the Time Trial ghosts' — keeps them across
-sessions, and lets you replay and compare any two: track map, dashboard,
-input traces, time delta, and a badge on every corner that costs you time.
+*Unofficial fan project — not affiliated with Formula 1 or EA/Codemasters.*
 
-![Comparing your lap against a rival ghost: speed-colored racing line, corner time badges, telemetry charts and delta trace](docs/img/compare-speed.png)
-*Your personal best vs a leaderboard rival's ghost: racing line colored by
-speed, badges on every corner costing (or gaining) 0.1 s+, sector timing,
-input traces and the time-delta graph.*
+![Your PB ghost compared against your best recorded lap: speed-colored racing line, green corner badges, telemetry charts and delta trace](docs/img/compare-speed.png)
+*Your PB ghost vs today's best lap: racing line colored by speed, a badge
+on every corner where the PB gains 0.1 s or more, input traces and the
+time-delta graph.*
 
 ## Run
 
