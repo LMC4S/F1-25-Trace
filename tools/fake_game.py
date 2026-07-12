@@ -7,9 +7,10 @@ the faster one and reproduces the real game's shadow-car quirks: it runs
 on the player's lap clock (parking at the line when it finishes first,
 rewinding when the player starts a new lap), its LapData sector fields
 are junk, and its CarTelemetry slot interleaves genuine frames with a
-constant flat-out placeholder (~486 km/h) — only Motion (position +
-velocity) and lapDistance are always genuine, which is exactly what the
-recorder relies on. Positions are the laps' real recorded coordinates.
+constant flat-out placeholder (~486 km/h) whose junk speed also leaks
+into Motion's velocity vector — only Motion's position, the lap clock and
+lapDistance are always genuine, which is exactly what the recorder relies
+on. Positions are the laps' real recorded coordinates.
 
 Usage:  python3 tools/fake_game.py [--speedup 20] [--port 20777]
 """
@@ -325,19 +326,20 @@ def main():
                     "last_ms": lap.lap_ms if lap_num > 1 else 0,
                     "s1": lap.s1_ms, "s2": lap.s2_ms, **vals,
                 }
-            # real recorded world position + velocity along the lap's own
-            # line; Motion stays genuine even when the telemetry slot
-            # carries a placeholder
-            p0, p1 = lap.pos_at(d), lap.pos_at(d + 3.0)
-            hx, hz = p1[0] - p0[0], p1[1] - p0[1]
-            hl = math.hypot(hx, hz) or 1.0
-            v = vals["spd"] / 3.6
-            positions[idx] = (p0[0], p0[1], hx / hl * v, hz / hl * v)
             if idx == 1 and frame % 2:
                 # the game interleaves a constant flat-out placeholder in
                 # the shadow car's CarTelemetry slot
                 cars[idx].update(spd=486, thr=1.0, brk=0.0, steer=0.0,
                                  gear=8)
+            # real recorded world position along the lap's own line; the
+            # velocity vector mirrors whatever the telemetry slot claims
+            # (junk on placeholder frames) — as in the real game, only the
+            # ghost's position is dependable
+            p0, p1 = lap.pos_at(d), lap.pos_at(d + 3.0)
+            hx, hz = p1[0] - p0[0], p1[1] - p0[1]
+            hl = math.hypot(hx, hz) or 1.0
+            v = cars[idx]["spd"] / 3.6
+            positions[idx] = (p0[0], p0[1], hx / hl * v, hz / hl * v)
 
         sock.sendto(motion_packet(sim_t, frame, positions), dest)
         sock.sendto(telem_packet(sim_t, frame, cars), dest)

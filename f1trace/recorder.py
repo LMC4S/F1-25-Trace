@@ -267,17 +267,22 @@ class Recorder(threading.Thread):
                 continue  # wait for the first motion packet for this car
             t = self.telem.get(idx) or {}
             spd = t.get("speed", 0)
-            if idx != self.player_idx and t:
-                # the shadow car's CarTelemetry slot interleaves genuine
-                # frames with a constant flat-out placeholder (~486 km/h,
-                # gear 8, full throttle). Motion velocity is always real:
-                # frames that disagree with it are placeholders — fall back
-                # to the last genuine frame, and take speed from motion
-                if abs(spd - m[5]) > 30:
+            if idx != self.player_idx:
+                # every direct speed the game sends for the shadow car
+                # lies: CarTelemetry interleaves a flat-out placeholder
+                # (~486 km/h, gear 8) and Motion's velocity vector carries
+                # the same junk — only its position is real. The lap clock
+                # and lapDistance are the dependable channels, so ghost
+                # speed is the slope of distance over time; telemetry
+                # frames that disagree with it are placeholders — fall
+                # back to the last genuine frame
+                est = _dist_speed(samples, cl.current_lap_ms,
+                                  cl.lap_distance)
+                if t and abs(t.get("speed", 0) - est) > 30:
                     t = self.good_telem.get(idx) or {}
-                else:
+                elif t:
                     self.good_telem[idx] = t
-                spd = int(round(m[5]))
+                spd = int(round(est))
             st = self.car_status.get(idx) or {}
             t2 = self.telem2.get(idx) or {}
             tt = t.get("tyre_temp") or (0, 0, 0, 0)
@@ -393,6 +398,10 @@ class Recorder(threading.Thread):
         s3 = lap_time_ms - s1 - s2 if s1 and s2 else 0
         cols = {name: [s[i] for s in samples]
                 for i, name in enumerate(self.COLUMNS)}
+        if role != "player":
+            # the per-frame estimate is causal (backward-looking); re-derive
+            # the stored channel with a centred window so it is smooth
+            cols["spd"] = _lsq_speed(cols["t"], cols["d"])
         st = self.car_status.get(idx) or {}
         assists = self._assists_for(idx, role, st)
         setup = self.setups.get(idx)
@@ -417,6 +426,56 @@ class Recorder(threading.Thread):
             "role": role, "lap_num": buf.lap_num,
             "lap_time_ms": lap_time_ms, "valid": not buf.invalid,
         })
+
+
+def _dist_speed(samples, t_ms, dist):
+    """Ghost speed in km/h: slope of lapDistance over the lap clock,
+    taken across the last ~150 ms of samples."""
+    if not samples:
+        return 0.0
+    ref = samples[max(0, len(samples) - 9)]
+    dt = t_ms - ref[0]
+    if dt <= 0:
+        return 0.0
+    return max(0.0, (dist - ref[1]) / dt * 3600.0)
+
+
+def _lsq_speed(ts, ds, half_ms=300):
+    """Ghost speed channel for storage: local quadratic least-squares fit
+    of lapDistance over the lap clock, evaluated as the slope at the centre
+    of a ±300 ms window (a Savitzky-Golay derivative). Quadratic follows
+    braking's curvature exactly, so the window can be wide enough to iron
+    out lapDistance's update stutter (it freezes and double-steps at half
+    the packet rate) without flattening the corners a linear fit would."""
+    out = []
+    n = len(ts)
+    a = b = 0
+    for i in range(n):
+        while a < i and ts[i] - ts[a] > half_ms:
+            a += 1
+        if b < i + 1:
+            b = i + 1
+        while b < n and ts[b] - ts[i] <= half_ms:
+            b += 1
+        tw = [x - ts[i] for x in ts[a:b]]
+        dw = ds[a:b]
+        s0 = len(tw)
+        s1 = sum(tw)
+        s2 = sum(x * x for x in tw)
+        s3 = sum(x ** 3 for x in tw)
+        s4 = sum(x ** 4 for x in tw)
+        r0 = sum(dw)
+        r1 = sum(x * y for x, y in zip(tw, dw))
+        r2 = sum(x * x * y for x, y in zip(tw, dw))
+        det = (s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s2 * s3)
+               + s2 * (s1 * s3 - s2 * s2))
+        if abs(det) < 1e-9:
+            out.append(out[-1] if out else 0)
+            continue
+        slope = (r0 * (s3 * s2 - s1 * s4) + r1 * (s0 * s4 - s2 * s2)
+                 + r2 * (s1 * s2 - s0 * s3)) / det
+        out.append(max(0, int(round(slope * 3600.0))))
+    return out
 
 
 def _fmt_time(ms):

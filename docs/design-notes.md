@@ -46,8 +46,9 @@ their own car slots, but not every packet type is trustworthy for them:
 
 | Source | For ghosts | Notes |
 | --- | --- | --- |
-| Motion (position, world velocity) | **always genuine** | trust unconditionally |
-| LapData `lapDistance`, `currentLapTime` | genuine | drives sampling |
+| Motion position | genuine | trusted |
+| Motion world velocity | **junk in some sessions** | mirrors the CarTelemetry placeholder; genuine in one Melbourne session, junk throughout a Spa session on the same install |
+| LapData `lapDistance`, `currentLapTime` | genuine | drives sampling; updates at half the packet rate (freeze/double-step stutter) |
 | LapData sector fields | **junk** | real sectors come from the TimeTrial packet |
 | CarTelemetry | **interleaved junk** | see below |
 | TimeTrial packet (id 14) | genuine | sectors, assists, equal-performance flag |
@@ -62,35 +63,56 @@ placeholders. This is game behaviour, not a settings problem, and it
 silently poisons speed (sawtooth trace), gear, and throttle if stored
 as-is.
 
+An earlier version of the fix took ghost speed from Motion's world
+velocity, believing it always genuine. A later Spa session disproved
+that: there, Motion velocity mirrored the exact same junk as
+CarTelemetry on every frame (so the two "independent" sources always
+agreed, and the placeholder detector passed everything). Motion
+velocity for ghosts is session-dependent and must not be trusted.
+
 ### The fix, and why it is shaped this way
 
 Two moves, one rule, one threshold
 ([recorder.py](../f1trace/recorder.py), sampling loop, ghost branch only):
 
-1. **Ghost speed always comes from Motion** (`|world velocity| * 3.6`),
-   never from CarTelemetry. No detection needed — the genuine source is
-   simply used unconditionally.
-2. **A telemetry frame is trusted only if it agrees with Motion**:
-   `abs(telemetry_speed - motion_speed) > 30` km/h marks it as a
-   placeholder, and the remaining channels (throttle, brake, gear, RPM,
-   tyre temps, DRS) hold the last genuine frame instead.
+1. **Ghost speed is derived, never read**: the slope of `lapDistance`
+   over the lap clock — the only two per-ghost channels observed genuine
+   in every session. While recording, a causal ~150 ms backward window;
+   at lap finalize the stored channel is re-derived with a local
+   quadratic least-squares fit over a centred ±300 ms window (a
+   Savitzky-Golay derivative). Quadratic matters: it follows braking's
+   curvature exactly, so the window can be wide enough to iron out
+   lapDistance's update stutter without flattening the corners a linear
+   fit at that width would (measured on a real Spa lap: frame-to-frame
+   ripple >4 km/h dropped from 97 to 7 occurrences vs linear ±200 ms,
+   peak deceleration preserved). The viewer adds one light binomial pass
+   on ghost speed at display time; the stored channel stays unpadded.
+2. **A telemetry frame is trusted only if it agrees with the derived
+   speed**: `abs(telemetry_speed - derived_speed) > 30` km/h marks it as
+   a placeholder, and the remaining channels (throttle, brake, gear,
+   RPM, tyre temps, DRS) hold the last genuine frame instead.
 
 Design considerations, recorded here so they don't get re-litigated:
 
 - **Physics invariant, not signature matching.** The tempting
   alternative — hard-coding `speed == 486 and gear == 8` — is brittle:
   if a patch changes the placeholder values it fails silently.
-  "Telemetry that disagrees with the speed implied by real positions is
-  not real" holds regardless of what the placeholder looks like.
-- **The 30 km/h threshold has large margin on both sides.** At 60 Hz,
-  even full braking (~5 g) changes speed ~3 km/h between adjacent
-  frames, so genuine telemetry/motion skew is single-digit km/h. The
-  placeholder is wrong by hundreds unless the car were actually near
-  486 km/h, which it cannot be.
+  "Telemetry that disagrees with the speed implied by real distance
+  covered is not real" holds regardless of what the placeholder looks
+  like.
+- **The reference must not share a failure mode with the signal it
+  vets.** That is exactly how the Motion-velocity version failed:
+  placeholder telemetry was checked against placeholder velocity, and
+  they matched. Distance-over-time cannot echo the placeholder.
+- **The 30 km/h threshold has large margin on both sides.** Even full
+  braking (~5 g) changes speed ~18 km/h per 100 ms, so genuine
+  telemetry skew against the windowed estimate stays low double-digit.
+  The placeholder is wrong by hundreds unless the car were actually
+  near 486 km/h, which it cannot be.
 - **Failure modes are benign.** A false positive (genuine frame flagged)
   holds throttle/brake for one tick; the speed trace is unaffected
-  because speed never comes from telemetry. A false negative is
-  physically impossible at real speeds.
+  because speed never comes from telemetry. A false negative requires
+  junk that happens to match the car's real speed, which is harmless.
 - **Blast radius is zero for player laps.** The whole branch is gated on
   `idx != self.player_idx`; player telemetry is stored untouched.
 
@@ -103,7 +125,7 @@ roles):
 
 | Rule | Observed behaviour it answers |
 | --- | --- |
-| speed from Motion + placeholder hold | CarTelemetry placeholder interleaving (above) |
+| speed derived from lapDistance/lap clock + placeholder hold | CarTelemetry placeholder interleaving; Motion velocity mirroring it in some sessions (above) |
 | loop detection: clock/distance rewind ⇒ finalize lap | ghosts loop at the line without ever incrementing `lap_num`; ghosts never flashback |
 | drop samples past the final lap time | a ghost faster than the player parks at the line while the shared lap clock keeps counting — filler tail |
 | drop loops that end short of the line | a player restart rewinds the ghost mid-lap; a truncated lap would also poison dedupe |
@@ -154,6 +176,22 @@ clamped to ±5.5 m): the slow component is outline-vs-game geometry
 mismatch, the fast component is actual line choice — only the latter is
 re-applied around the outline. A sloppy affine fit (RMS > 45 m) is
 rejected entirely: better no line offsets than wrong ones.
+
+That synth line has a built-in geometric limit: a point is always
+"centerline position at this lapDistance, swung sideways", so it can
+only ever follow the corner's arc — a chicane cut straight across, or a
+deep kerb ride past the ±5.5 m clamp, gets redrawn as hugging the
+inside of the arc. So the map keeps **two lines** and switches by zoom:
+
+- zoomed out (< 1 px/m): the synth line — stable, clean, comparable;
+- zoomed in (≥ 1 px/m): the **true trajectory** — the registered raw
+  coordinates with only the slow ±110 m 2D drift subtracted, nothing
+  clamped. Same registration residual correction, real geometry: cuts,
+  kerb rides and off-tracks appear exactly as driven.
+
+The threshold is where the difference starts to matter (~1 px per
+metre); dots, the racing line and click-to-seek all switch together so
+the map never disagrees with itself.
 
 ### Corner numbering
 

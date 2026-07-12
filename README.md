@@ -172,7 +172,10 @@ a lap that is already in the database is detected and skipped.
 ## Track maps
 
 Laps recorded from the game are drawn from the car's **real world
-coordinates** — the map is exactly the line that was driven. For laps
+coordinates**. Zoomed out, the line is lightly snapped around the
+circuit outline so every lap sits on the identical map; zoom in past
+roughly 1 pixel per metre and it switches to the exact driven
+trajectory — chicane cuts and kerb rides appear as driven. For laps
 without position
 data, the viewer falls back to bundled **real circuit
 outlines** for every 2026-calendar track including Madrid

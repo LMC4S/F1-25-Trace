@@ -453,6 +453,7 @@ function synthCoords(lap, geom) {
   const s = lap.samples, n = geom.n;
   const k = geom.total / (lap.track_length || geom.total);
   if (!lap.rawX) { lap.rawX = s.x; lap.rawZ = s.z; }  // pre-synth coords
+  lap.trueX = lap.trueZ = null;   // set by lineOffsets when computable
   const off = lineOffsets(lap, geom, k);
   const N = s.d.length, xs = new Array(N), zs = new Array(N);
   for (let i = 0; i < N; i++) {
@@ -470,7 +471,12 @@ function synthCoords(lap, geom) {
 
 /* Signed lateral offset of the driven line vs the outline centerline,
    high-pass filtered along lap distance: the slow component is outline-vs-
-   game geometry mismatch, the fast component is actual line choice. */
+   game geometry mismatch, the fast component is actual line choice.
+   Side product: lap.trueX/trueZ — the registered raw trajectory with only
+   that slow 2D drift subtracted, nothing clamped. Its geometry is the real
+   one (corner cuts, kerb rides), unlike the synth line, which can only
+   swing laterally around the centerline arc; the map switches to it once
+   zoomed in far enough for the difference to matter. */
 function lineOffsets(lap, geom, k) {
   if (!geom.xform) return null;
   const s = lap.samples, X = lap.rawX, Z = lap.rawZ, N = s.d.length;
@@ -481,6 +487,8 @@ function lineOffsets(lap, geom, k) {
   if (maxX - minX < 50) return null;   // no position data (imports)
   const [a, b, c, d, e, f] = geom.xform, n = geom.n;
   const raw = new Float64Array(N);
+  const gxs = new Float64Array(N), gzs = new Float64Array(N);
+  const dxs = new Float64Array(N), dzs = new Float64Array(N);
   for (let i = 0; i < N; i++) {
     const gx = a * X[i] + b * Z[i] + c;
     const gz = d * X[i] + e * Z[i] + f;
@@ -490,16 +498,27 @@ function lineOffsets(lap, geom, k) {
     const cz = geom.zs[i0] + (geom.zs[i1] - geom.zs[i0]) * ff;
     const nx = geom.nx[i0] + (geom.nx[i1] - geom.nx[i0]) * ff;
     const nz = geom.nz[i0] + (geom.nz[i1] - geom.nz[i0]) * ff;
-    raw[i] = (gx - cx) * nx + (gz - cz) * nz;
+    gxs[i] = gx; gzs[i] = gz;
+    dxs[i] = gx - cx; dzs[i] = gz - cz;
+    raw[i] = dxs[i] * nx + dzs[i] * nz;
   }
   // high-pass: subtract the moving average over ±110 m, clamp to the road
   const out = new Float64Array(N);
-  let lo = 0, hi = 0, sum = 0;
+  const tX = new Float64Array(N), tZ = new Float64Array(N);
+  let lo = 0, hi = 0, sum = 0, sumX = 0, sumZ = 0;
   for (let i = 0; i < N; i++) {
-    while (hi < N && s.d[hi] <= s.d[i] + 110) { sum += raw[hi]; hi++; }
-    while (s.d[lo] < s.d[i] - 110) { sum -= raw[lo]; lo++; }
-    out[i] = Math.max(-5.5, Math.min(5.5, raw[i] - sum / (hi - lo)));
+    while (hi < N && s.d[hi] <= s.d[i] + 110) {
+      sum += raw[hi]; sumX += dxs[hi]; sumZ += dzs[hi]; hi++;
+    }
+    while (s.d[lo] < s.d[i] - 110) {
+      sum -= raw[lo]; sumX -= dxs[lo]; sumZ -= dzs[lo]; lo++;
+    }
+    const m = hi - lo;
+    out[i] = Math.max(-5.5, Math.min(5.5, raw[i] - sum / m));
+    tX[i] = gxs[i] - sumX / m;
+    tZ[i] = gzs[i] - sumZ / m;
   }
+  lap.trueX = tX; lap.trueZ = tZ;
   return out;
 }
 
@@ -518,6 +537,19 @@ function prepLap(lap) {
   }
   if (keep.length !== s.d.length) {
     for (const k of Object.keys(s)) s[k] = keep.map((i) => s[k][i]);
+  }
+  // ghost speed is derived from lapDistance (the game broadcasts no real
+  // speed for ghosts) and keeps a little quantisation ripple — take it
+  // out for display with one light binomial pass
+  if ((lap.car_role === "pb_ghost" || lap.car_role === "rival") &&
+      s.spd.length > 4 && !lap.spdSmoothed) {
+    lap.spdSmoothed = true;
+    const v = s.spd, n = v.length, sm = new Array(n);
+    for (let i = 0; i < n; i++)
+      sm[i] = Math.round((v[Math.max(0, i - 2)] + 4 * v[Math.max(0, i - 1)] +
+                          6 * v[i] + 4 * v[Math.min(n - 1, i + 1)] +
+                          v[Math.min(n - 1, i + 2)]) / 16);
+    s.spd = sm;
   }
   const geom = trackGeom(lap.track_id);
   if (geom) {
@@ -987,11 +1019,20 @@ function saveZoom() {
 let mapStatic = null;
 let dctx = null;   // context the path helpers draw into
 
+/* Map coordinates for a lap: the clean synth line normally, the real
+   (drift-corrected raw) trajectory once zoomed past ~1 px/m — at that
+   scale actual corner-cut geometry matters more than tidiness. */
+function mapXZ(lap) {
+  if (lap.trueX && view && view.scale / view.dpr >= 1)
+    return { x: lap.trueX, z: lap.trueZ };
+  return { x: lap.samples.x, z: lap.samples.z };
+}
+
 function pathStroke(lap, i0, i1, color, width, alpha) {
-  const s = lap.samples;
+  const p = mapXZ(lap);
   dctx.beginPath();
-  dctx.moveTo(W2X(s.x[i0]), W2Y(s.z[i0]));
-  for (let i = i0 + 1; i <= i1; i++) dctx.lineTo(W2X(s.x[i]), W2Y(s.z[i]));
+  dctx.moveTo(W2X(p.x[i0]), W2Y(p.z[i0]));
+  for (let i = i0 + 1; i <= i1; i++) dctx.lineTo(W2X(p.x[i]), W2Y(p.z[i]));
   dctx.globalAlpha = alpha == null ? 1 : alpha;
   dctx.strokeStyle = color; dctx.lineWidth = width * view.dpr;
   dctx.lineJoin = "round"; dctx.lineCap = "round";
@@ -1071,11 +1112,12 @@ function renderMapStatic() {
 
   // racing line colored by speed / gap; true car width when zoomed
   const lineW = Math.max(2.6, 1.9 * mpx) * dpr;
-  const stepN = Math.max(1, Math.floor(s.x.length / 900));
-  for (let i = stepN; i < s.x.length; i += stepN) {
+  const P = mapXZ(A);
+  const stepN = Math.max(1, Math.floor(P.x.length / 900));
+  for (let i = stepN; i < P.x.length; i += stepN) {
     dctx.beginPath();
-    dctx.moveTo(W2X(s.x[i - stepN]), W2Y(s.z[i - stepN]));
-    dctx.lineTo(W2X(s.x[i]), W2Y(s.z[i]));
+    dctx.moveTo(W2X(P.x[i - stepN]), W2Y(P.z[i - stepN]));
+    dctx.lineTo(W2X(P.x[i]), W2Y(P.z[i]));
     dctx.strokeStyle = A.lineColors[i];
     dctx.lineWidth = lineW; dctx.lineCap = "round";
     dctx.stroke();
@@ -1171,8 +1213,9 @@ function drawMap() {
   // ghost dot (reference lap at same elapsed time)
   if (state.lapB) {
     const B = state.lapB, tB = Math.min(state.t, B.duration);
-    const bx = interp(B.samples.t, B.samples.x, tB);
-    const bz = interp(B.samples.t, B.samples.z, tB);
+    const pB = mapXZ(B);
+    const bx = interp(B.samples.t, pB.x, tB);
+    const bz = interp(B.samples.t, pB.z, tB);
     mctx.beginPath();
     mctx.arc(W2X(bx), W2Y(bz), rB, 0, 7);
     mctx.fillStyle = "#fb923c"; mctx.globalAlpha = 0.85; mctx.fill();
@@ -1180,7 +1223,8 @@ function drawMap() {
   }
 
   // player dot
-  const ax = interp(s.t, s.x, state.t), az = interp(s.t, s.z, state.t);
+  const pA = mapXZ(A);
+  const ax = interp(s.t, pA.x, state.t), az = interp(s.t, pA.z, state.t);
   mctx.beginPath();
   mctx.arc(W2X(ax), W2Y(az), rA, 0, 7);
   mctx.fillStyle = "#22d3ee";
@@ -1190,11 +1234,11 @@ function drawMap() {
 }
 
 function mapSeek(px, py) {
-  const s = state.lapA.samples;
+  const s = state.lapA.samples, p = mapXZ(state.lapA);
   let best = -1, bestDist = 1e18;
-  const step = Math.max(1, Math.floor(s.x.length / 2000));
-  for (let i = 0; i < s.x.length; i += step) {
-    const dx = W2X(s.x[i]) - px, dy = W2Y(s.z[i]) - py;
+  const step = Math.max(1, Math.floor(p.x.length / 2000));
+  for (let i = 0; i < p.x.length; i += step) {
+    const dx = W2X(p.x[i]) - px, dy = W2Y(p.z[i]) - py;
     const d2 = dx * dx + dy * dy;
     if (d2 < bestDist) { bestDist = d2; best = i; }
   }
