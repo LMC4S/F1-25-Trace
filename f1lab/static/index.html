@@ -39,7 +39,7 @@ if (location.protocol === "file:") {
     </div>
     <div class="side-head">
       <span>LAPS</span>
-      <span class="hint">click = view · REF = compare against</span>
+      <span class="hint">click = view · VS = compare against</span>
       <button id="side-toggle" title="collapse the lap list">«</button>
     </div>
     <div id="lap-controls">
@@ -181,6 +181,7 @@ if (location.protocol === "file:") {
           <span id="zoom-txt"></span>
           <button id="zoom-reset" title="or double-click the map">RESET</button>
         </div>
+        <div id="time-display">0:00.000</div>
       </div>
 
       <div id="sector-card"></div>
@@ -190,7 +191,7 @@ if (location.protocol === "file:") {
         <h2>No lap selected</h2>
         <p>Drive some laps with the game broadcasting UDP telemetry to this
         machine, then pick a lap on the left.<br>
-        Mark any other lap of the same track as <b>REF</b> to compare — even
+        Mark any other lap of the same track as <b>VS</b> to compare — even
         from a different day: ghost car, overlay traces and a time-delta graph
         showing exactly where you gain or lose.<br>
         Scroll on the map to zoom into a corner; the charts follow.</p>
@@ -207,7 +208,6 @@ if (location.protocol === "file:") {
         <option value="4">4×</option>
       </select>
       <input id="scrub" type="range" min="0" max="1000" value="0">
-      <div id="time-display">0:00.000</div>
     </div>
 
     <div id="splitter" title="drag to resize the charts"></div>

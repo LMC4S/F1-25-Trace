@@ -188,8 +188,8 @@ header {
 }
 .refbtn {
   background: none; border: 1px solid #333947; color: #566075;
-  font-family: inherit; font-size: 9px; font-weight: 800; font-style: italic;
-  letter-spacing: 1px; border-radius: 4px; padding: 2px 7px; cursor: pointer;
+  font-family: inherit; font-size: 10px; font-weight: 800; font-style: italic;
+  letter-spacing: 1px; border-radius: 4px; padding: 4px 16px; cursor: pointer;
   flex: none;
 }
 .refbtn:hover { border-color: var(--ref); color: var(--ref); }
@@ -224,9 +224,10 @@ header {
 
 /* ---------- map toolbar ---------- */
 #map-toolbar {
-  position: absolute; left: 12px; bottom: 12px; display: flex;
-  align-items: center; gap: 12px;
+  position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex;
+  align-items: center; gap: 12px; pointer-events: none;
 }
+#map-toolbar > * { pointer-events: auto; }
 .seg {
   display: flex; background: var(--card); border: 1px solid var(--line);
   border-radius: 7px; overflow: hidden;
@@ -429,6 +430,10 @@ header {
   background: var(--panel2); color: var(--text); font-size: 14px; cursor: pointer;
 }
 #btn-play:hover { border-color: var(--accent); }
+#transport .dd { width: 58px; flex: none; }
+#transport .dd-btn {
+  width: 100%; padding: 6px 7px; gap: 3px; justify-content: space-between;
+}
 #scrub {
   flex: 1; -webkit-appearance: none; appearance: none;
   height: 7px; border-radius: 4px; background: #1c2331; outline: none;
@@ -440,8 +445,9 @@ header {
   cursor: pointer; box-shadow: 0 1px 6px rgba(0,0,0,.6);
 }
 #time-display {
+  margin-left: auto; pointer-events: none;
   font-variant-numeric: tabular-nums; font-weight: 700; font-style: italic;
-  font-size: 15px; min-width: 90px; text-align: right;
+  font-size: 15px; text-align: right;
 }
 
 /* ---------- charts ---------- */
@@ -466,8 +472,10 @@ header {
   display: flex; align-items: stretch; gap: 8px; margin-top: 4px;
 }
 .chart-row.tall { flex: 1.5; }
+/* label width + row gap (8px) = play btn + speed select + transport gaps,
+   so the chart canvases and the scrub bar share the same x range */
 .chart-row label {
-  width: 64px; flex: none; font-size: 9px; font-weight: 700;
+  width: 104px; flex: none; font-size: 9px; font-weight: 700;
   letter-spacing: 1px; color: var(--dim); padding-top: 4px; text-align: right;
 }
 canvas.chart { flex: 1; min-width: 0; min-height: 0; cursor: crosshair; }

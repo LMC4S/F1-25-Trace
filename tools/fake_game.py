@@ -1,6 +1,6 @@
 """Fake F1 25 (2026 Season Pack) game: replays the two laps from
-`examples/spa-lap.md` as real UDP telemetry so the whole pipeline can be
-tested without the game.
+`spa-lap.md` (next to this script) as real UDP telemetry so the whole
+pipeline can be tested without the game.
 
 Player car (idx 0) drives the slower lap; the rival ghost (idx 1) drives
 the faster one and reproduces the real game's shadow-car quirks: it runs
@@ -302,8 +302,8 @@ def main():
     ap.add_argument("--laps", type=int, default=1, help="full laps to drive")
     args = ap.parse_args()
 
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cur, pb = load_data_md(os.path.join(root, "examples", "spa-lap.md"))
+    here = os.path.dirname(os.path.abspath(__file__))
+    cur, pb = load_data_md(os.path.join(here, "spa-lap.md"))
     lap_len = 7004
     pos_of = build_track(lap_len)
 

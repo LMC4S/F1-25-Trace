@@ -648,12 +648,30 @@ function styleSelect(sel) {
 
 /* ---------------------------------------------------------------- header / status */
 
+/* Demo mode: once the lap list is in, open the driven lap vs the PB ghost
+   so the first thing on screen is a full comparison. */
+let demoLoaded = false;
+async function autoloadDemo() {
+  if (demoLoaded || state.lapA || !state.laps || !state.laps.length) return;
+  demoLoaded = true;
+  const best = (role) => state.laps
+    .filter((l) => l.valid && l.lap_time_ms &&
+                   (l.car_role === "player") === (role === "player"))
+    .sort((a, b) => a.lap_time_ms - b.lap_time_ms)[0];
+  const you = best("player"), ghost = best("ghost");
+  if (you) await viewLap(you.id);
+  if (ghost) await toggleRef(ghost.id);
+}
+
 let lastLapStamp = "";
 async function pollStatus() {
   try {
     const st = await api("/api/status");
     const chip = $("status-chip");
-    if (st.pps > 0) {
+    if (st.demo) {
+      chip.className = "chip idle"; chip.textContent = "DEMO";
+      autoloadDemo();
+    } else if (st.pps > 0) {
       chip.className = "chip live"; chip.textContent = "LIVE " + st.pps + " pps";
     } else {
       chip.className = "chip idle";
@@ -725,7 +743,9 @@ function fmtSession(lap) {
 }
 
 function roleBadge(role) {
-  const label = { player: "YOU", rival: "RIVAL", pb_ghost: "PB·G" }[role] || role;
+  // your own laps are the default case — only ghosts get a badge
+  if (role === "player") return "";
+  const label = { rival: "RIVAL", pb_ghost: "PB·G" }[role] || role;
   return `<span class="badge ${role}">${label}</span>`;
 }
 
@@ -796,8 +816,8 @@ function renderLapList() {
       ? `<span class="gap">+${((lap.lap_time_ms - baseMs) / 1000).toFixed(3)}</span>` : "";
     const team = lap.team_name ? lap.team_name + " · " : "";
     const sub = ranked
-      ? `${team}${fmtSession(lap).split(" · ")[0]} · L${lap.lap_num} · ${fmtTime(lap.s1_ms)} | ${fmtTime(lap.s2_ms)} | ${fmtTime(lap.s3_ms)}`
-      : `${team}L${lap.lap_num} · ${fmtTime(lap.s1_ms)} | ${fmtTime(lap.s2_ms)} | ${fmtTime(lap.s3_ms)} · ${lap.top_speed} km/h`;
+      ? `${team}${fmtSession(lap).split(" · ")[0]} · L${lap.lap_num}`
+      : `${team}L${lap.lap_num}`;
     row.innerHTML = `
       ${ranked ? `<span class="rank">${i + 1}</span>` : ""}
       ${roleBadge(lap.car_role)}
@@ -808,7 +828,7 @@ function renderLapList() {
         <div class="lap-sub">${sub}</div>
       </div>
       <button class="refbtn ${isRef ? "on" : ""}"
-        title="${isRef ? "stop comparing against this lap" : "compare the viewed lap against this one"}">REF</button>
+        title="${isRef ? "stop comparing against this lap" : "compare the viewed lap against this one"}">VS</button>
       <button class="del" title="delete lap">✕</button>`;
     row.addEventListener("click", () => viewLap(lap.id));
     row.querySelector(".refbtn").addEventListener("click", (e) => {
@@ -1172,6 +1192,7 @@ function updateViewD() {
   for (const cfg of charts) buildChart(cfg);
   buildDeltaChart();
   updateZoomChip();
+  updateScrubTint();
   drawFrame();
 }
 
@@ -1553,8 +1574,8 @@ function rebuildScene() {
   renderMapStatic();
   updateToolbar();
   updateSectorCard();
-  updateScrubTint();
   state.viewD = computeViewD();   // zoom carries over between laps
+  updateScrubTint();
   updateZoomChip();
   renderSetupCard();
   for (const cfg of charts) buildChart(cfg);
@@ -1573,7 +1594,7 @@ function updateToolbar() {
     title.textContent = "TRACK DOMINANCE";
     bar.style.background = `linear-gradient(90deg, ${GAP_RAMP.join(",")})`;
     lo.textContent = "YOU FASTER"; lo.style.color = "#22d3ee";
-    hi.textContent = "REF FASTER"; hi.style.color = "#fb923c";
+    hi.textContent = "VS FASTER"; hi.style.color = "#fb923c";
   } else {
     title.textContent = "SPEED";
     // legend bar mirrors the gamma curve applied to the racing line
@@ -1599,7 +1620,7 @@ function updateSectorCard() {
       ${secs(A).map((v) => `<td>${fmtS(v)}</td>`).join("")}
       <td class="laptime">${fmtTime(A.lap_time_ms, 1)}</td></tr>`;
   if (B) {
-    html += `<tr><td class="rowlbl">REF</td>
+    html += `<tr><td class="rowlbl">VS</td>
       ${secs(B).map((v) => `<td>${fmtS(v)}</td>`).join("")}
       <td class="laptime">${fmtTime(B.lap_time_ms, 1)}</td></tr><tr>
       <td class="rowlbl">Δ</td>`;
@@ -1666,7 +1687,7 @@ function renderSetupCard() {
   const A = state.lapA, B = state.lapB;
   const cols = [A, B].filter(Boolean);
   let html = `<div class="card-tag">SETUP</div><table><tr><th></th>
-    <th class="cA">${B ? "YOU" : "LAP"}</th>${B ? '<th class="cB">REF</th>' : ""}</tr>`;
+    <th class="cA">${B ? "YOU" : "LAP"}</th>${B ? '<th class="cB">VS</th>' : ""}</tr>`;
   html += `<tr><td class="rowlbl">Car</td>` + cols.map((l) =>
     `<td>${l.team_name || "—"}</td>`).join("") + "</tr>";
   html += `<tr><td class="rowlbl">Assists</td>` + cols.map((l) =>
@@ -1685,14 +1706,29 @@ function renderSetupCard() {
   card.innerHTML = html + "</table>";
 }
 
+/* Scrub bar x = lap distance over the same span as the charts, so the
+   thumb, the sector tints and the chart cursor line up exactly. */
+function scrubMaxD() {
+  const A = state.lapA;
+  return Math.max(A.maxD, state.lapB ? state.lapB.maxD : 0);
+}
+
 function updateScrubTint() {
   const A = state.lapA, el = $("scrub");
-  if (!A.s1_ms || !A.s2_ms) { el.style.background = ""; return; }
-  const p1 = (A.s1_ms / A.duration) * 100;
-  const p2 = ((A.s1_ms + A.s2_ms) / A.duration) * 100;
-  el.style.background =
+  if (!A || !A.secD) { if (el) el.style.background = ""; return; }
+  const den = scrubMaxD();
+  const p1 = (A.secD[0] / den) * 100, p2 = (A.secD[1] / den) * 100;
+  const p3 = (A.maxD / den) * 100;
+  let bg =
     `linear-gradient(90deg, rgba(248,113,113,.4) 0 ${p1}%,` +
-    ` rgba(96,165,250,.4) ${p1}% ${p2}%, rgba(251,191,36,.4) ${p2}% 100%)`;
+    ` rgba(96,165,250,.4) ${p1}% ${p2}%, rgba(251,191,36,.4) ${p2}% ${p3}%` +
+    (p3 < 99.9 ? `, #1c2331 ${p3}% 100%` : "") + ")";
+  if (state.viewD) {   // charts show a zoomed stretch: dim the rest
+    const v0 = (state.viewD[0] / den) * 100, v1 = (state.viewD[1] / den) * 100;
+    bg = `linear-gradient(90deg, rgba(10,13,18,.72) 0 ${v0}%,` +
+         ` transparent ${v0}% ${v1}%, rgba(10,13,18,.72) ${v1}% 100%), ` + bg;
+  }
+  el.style.background = bg;
 }
 
 function seek(t) {
@@ -1713,12 +1749,12 @@ function drawFrame() {
     interp(s.t, s.ot, t) > 0.5,
     interp(s.t, s.str, t), interp(s.t, s.rpm, t));
   drawChartCursors();
-  $("scrub").value = Math.round((t / A.duration) * 1000);
+  const dA = interp(s.t, s.d, t);
+  $("scrub").value = Math.round((dA / scrubMaxD()) * 1000);
   $("time-display").textContent = fmtTime(t, 1);
 
   const hd = $("hud-delta");
   if (state.lapB) {
-    const dA = interp(s.t, s.d, t);
     const dSec = (t - interp(state.lapB.samples.d, state.lapB.samples.t,
                              Math.min(dA, state.lapB.maxD))) / 1000;
     hd.textContent = fmtDelta(dSec);
@@ -1753,7 +1789,10 @@ $("speed-select").addEventListener("change", (e) => {
   state.speed = parseFloat(e.target.value);
 });
 $("scrub").addEventListener("input", (e) => {
-  if (state.lapA) seek((e.target.value / 1000) * state.lapA.duration);
+  const A = state.lapA;
+  if (!A) return;
+  const d = Math.min((e.target.value / 1000) * scrubMaxD(), A.maxD);
+  seek(interp(A.samples.d, A.samples.t, d));
 });
 $("track-select").addEventListener("change", async (e) => {
   const id = parseInt(e.target.value, 10);

@@ -20,7 +20,7 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 _local = threading.local()
 
 
-def make_handler(db_path, recorder):
+def make_handler(db_path, recorder, demo=False):
 
     def get_con():
         if getattr(_local, "con", None) is None:
@@ -61,8 +61,11 @@ def make_handler(db_path, recorder):
             path = self.path.split("?")[0]
             try:
                 if path == "/api/status":
-                    return self._json(recorder.get_status() if recorder
-                                      else {"listening": False})
+                    st = (recorder.get_status() if recorder
+                          else {"listening": False})
+                    if demo:
+                        st["demo"] = True
+                    return self._json(st)
                 if path == "/api/sessions":
                     return self.sessions()
                 if path == "/api/tracks":
@@ -185,8 +188,8 @@ def make_handler(db_path, recorder):
     return Handler
 
 
-def serve(db_path, recorder, http_port=8020):
+def serve(db_path, recorder, http_port=8020, demo=False):
     server = ThreadingHTTPServer(("0.0.0.0", http_port),
-                                 make_handler(db_path, recorder))
+                                 make_handler(db_path, recorder, demo))
     print("[f1lab] viewer at http://localhost:%d" % http_port)
     server.serve_forever()

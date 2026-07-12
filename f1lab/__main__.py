@@ -2,7 +2,9 @@
 
 import argparse
 import os
+import shutil
 import socket
+import tempfile
 
 from . import recorder as recorder_mod
 from . import server
@@ -27,25 +29,41 @@ def main():
     ap.add_argument("--http-port", type=int, default=8020,
                     help="viewer web port (default 8020)")
     ap.add_argument("--db", default=None, help="database file path")
+    ap.add_argument("--demo", action="store_true",
+                    help="browse two bundled example laps; no game or "
+                         "recording involved")
     args = ap.parse_args()
 
-    db_path = args.db or os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "data", "f1lab.db")
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    if args.demo:
+        # Work on a throwaway copy so the bundled file is never written to
+        # (WAL sidecars, deletes from the viewer).
+        db_path = os.path.join(tempfile.mkdtemp(prefix="f1lab-demo-"),
+                               "demo.db")
+        shutil.copyfile(os.path.join(os.path.dirname(
+            os.path.abspath(__file__)), "demo.db"), db_path)
+    else:
+        db_path = args.db or os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "data", "f1lab.db")
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
     print("=" * 62)
-    print("  F1 Lab — telemetry recorder + viewer")
-    print("  In the game set:  Settings > Telemetry")
-    print("    UDP Telemetry: On    UDP Broadcast: Off")
-    print("    UDP IP Address: %s   Port: %d" % (lan_ip(), args.udp_port))
-    print("    UDP Send Rate: 60Hz  UDP Format: F1 25 2026 Season Pack")
+    if args.demo:
+        print("  F1 Lab — demo: two bundled Melbourne laps, no recording")
+    else:
+        print("  F1 Lab — telemetry recorder + viewer")
+        print("  In the game set:  Settings > Telemetry")
+        print("    UDP Telemetry: On    UDP Broadcast: Off")
+        print("    UDP IP Address: %s   Port: %d" % (lan_ip(), args.udp_port))
+        print("    UDP Send Rate: 60Hz  UDP Format: F1 25 2026 Season Pack")
     print("  Viewer:  http://localhost:%d" % args.http_port)
     print("=" * 62)
 
-    rec = recorder_mod.Recorder(db_path, udp_port=args.udp_port)
-    rec.start()
+    rec = None
+    if not args.demo:
+        rec = recorder_mod.Recorder(db_path, udp_port=args.udp_port)
+        rec.start()
     try:
-        server.serve(db_path, rec, http_port=args.http_port)
+        server.serve(db_path, rec, http_port=args.http_port, demo=args.demo)
     except KeyboardInterrupt:
         print("\n[f1lab] bye")
     except OSError:

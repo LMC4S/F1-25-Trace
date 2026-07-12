@@ -166,7 +166,7 @@ handful of subsystems:
 ## Testing without the game
 
 `tools/fake_game.py --speedup 40` replays two real Spa laps (from an
-F1Laps export in `examples/`) as authentic 2026-format UDP, with the
+F1Laps export, `tools/spa-lap.md`) as authentic 2026-format UDP, with the
 rival ghost reproducing the real game's shadow-car behaviour: shared
 lap clock (parks at the line, rewinds on player restart), junk LapData
 sectors, and CarTelemetry placeholder interleaving. If the recorder

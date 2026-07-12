@@ -29,6 +29,10 @@ Nothing to install: any Python 3 will do — it's standard library only.
 
 Options: `--udp-port`, `--http-port`, `--db`.
 
+To look around before hooking up the game, `python3 -m f1lab --demo`
+serves two bundled Melbourne laps, opened as a ready-made comparison.
+Demo mode records nothing and leaves your own lap database untouched.
+
 ## Game settings (on the PC running the game)
 
 `Settings → Telemetry`:
@@ -44,6 +48,21 @@ Options: `--udp-port`, `--http-port`, `--db`.
 
 Then just drive. Every completed lap is stored automatically — yours **and the
 Time Trial ghosts'**.
+
+### How you know it's working
+
+The chip next to the logo in the viewer header tells you whether telemetry
+is arriving:
+
+| Chip | Meaning |
+| --- | --- |
+| `LIVE … pps` | receiving — the number is packets per second, and the track / session / live lap time show next to it |
+| `IDLE` | listening but nothing arriving. Normal in menus (the game only broadcasts on track); if it stays IDLE while you drive, re-check the IP address and port above |
+| `OFFLINE` | no recorder — usually another f1lab instance already holds the UDP port |
+
+Load into a session and the chip should flip to `LIVE` within a couple of
+seconds. In Time Trial a second chip shows the ghost situation
+(`RIVAL GHOST ✓` etc. — see below).
 
 ## Ghost laps: your PB and any leaderboard entry
 
@@ -71,7 +90,7 @@ Everything the recorder has stored is on the web page it serves at
   gearbox, racing line…) — side by side with the reference lap's.
 - Click a lap to replay it: dot on the track map + instrument cluster
   (speed, gear, throttle/brake arcs, rev lights, steering wheel, DRS/OT).
-- Mark any other lap as **REF** — from any session, any day: ghost dot,
+- Mark any other lap as **VS** — from any session, any day: ghost dot,
   overlaid speed / throttle / brake / steering traces, and a **DELTA** graph
   vs distance — green where you gain time on the reference, red where you
   lose it.
@@ -114,7 +133,7 @@ outlines** for every 2026-calendar track including Madrid
 python3 tools/fake_game.py --speedup 40
 ```
 
-Replays the Spa lap from `examples/spa-lap.md` (player + rival ghost) as real
+Replays the Spa lap from `tools/spa-lap.md` (player + rival ghost) as real
 2026-format UDP packets against the recorder.
 
 ## Layout
