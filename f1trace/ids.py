@@ -33,6 +33,12 @@ TEAMS = {
     479: "Williams '26", 480: "Aston Martin '26", 481: "Alpine '26",
     482: "Racing Bulls '26", 483: "Haas '26", 484: "McLaren '26",
     485: "Audi '26", 486: "Cadillac '26",
+    # The 2025 UDP layout carries teamId as a single byte, so the game
+    # truncates the '26 grid ids (476-486) to their low byte (220-230).
+    220: "Mercedes '26", 221: "Ferrari '26", 222: "Red Bull '26",
+    223: "Williams '26", 224: "Aston Martin '26", 225: "Alpine '26",
+    226: "Racing Bulls '26", 227: "Haas '26", 228: "McLaren '26",
+    229: "Audi '26", 230: "Cadillac '26",
 }
 
 def track_name(track_id):
