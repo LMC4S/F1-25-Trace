@@ -205,8 +205,15 @@ class Recorder(threading.Thread):
     def _on_lap_data(self, data, fmt):
         cars, pb_idx, rival_idx = packets.parse_lap_data(data, fmt)
         self.pb_idx, self.rival_idx = pb_idx, rival_idx
-        self._set_status(ghosts={"pb": pb_idx != 255,
-                                 "rival": rival_idx != 255})
+        # Time Trial designates a rival slot even with ghosts switched off
+        # (it's the datum the HUD compares against) — only claim a pace is
+        # being captured when the slot is actually driving.
+        def driving(i):
+            cl = cars.get(i)
+            return (cl is not None and cl.current_lap_ms > 0
+                    and cl.lap_distance >= 0)
+        self._set_status(ghosts={"pb": driving(pb_idx),
+                                 "rival": driving(rival_idx)})
         for gidx in {pb_idx, rival_idx} - {255, self.player_idx}:
             self._ghost_sample(gidx, cars.get(gidx))
 
